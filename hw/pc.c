@@ -43,6 +43,8 @@
 #include "ui/qemu-spice.h"
 #include "memory.h"
 #include "exec-memory.h"
+#include "arch_init.h"
+#include "xen.h"
 
 /* output Bochs bios info messages */
 //#define DEBUG_BIOS
@@ -1121,7 +1123,7 @@ void pc_basic_device_init(qemu_irq *gsi,
     DriveInfo *fd[MAX_FD];
     qemu_irq rtc_irq = NULL;
     qemu_irq *a20_line;
-    ISADevice *i8042, *port92, *vmmouse, *pit;
+    ISADevice *i8042, *port92, *vmmouse, *pit = NULL;
     qemu_irq *cpu_exit_irq;
 
     register_ioport_write(0x80, 1, 1, ioport80_write, NULL);
@@ -1142,8 +1144,10 @@ void pc_basic_device_init(qemu_irq *gsi,
 
     qemu_register_boot_set(pc_boot_set, *rtc_state);
 
-    pit = pit_init(0x40, 0);
-    pcspk_init(pit);
+    if (!xen_enabled()) {
+        pit = pit_init(0x40, 0);
+        pcspk_init(pit);
+    }
 
     for(i = 0; i < MAX_SERIAL_PORTS; i++) {
         if (serial_hds[i]) {
