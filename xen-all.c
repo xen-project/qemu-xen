@@ -188,6 +188,14 @@ void xen_ram_alloc(ram_addr_t ram_addr, ram_addr_t size)
     xen_pfn_t *pfn_list;
     int i;
 
+    if (runstate_check(RUN_STATE_INMIGRATE)) {
+        /* RAM already populated in Xen */
+        fprintf(stderr, "%s: do not alloc "RAM_ADDR_FMT
+                " bytes of ram at "RAM_ADDR_FMT" when runstate is INMIGRATE\n",
+                __func__, size, ram_addr); 
+        return;
+    }
+
     trace_xen_ram_alloc(ram_addr, size);
 
     nr_pfn = size >> TARGET_PAGE_BITS;
