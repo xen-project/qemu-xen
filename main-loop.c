@@ -223,11 +223,11 @@ static int n_poll_fds;
 static int max_priority;
 
 static void glib_select_fill(int *max_fd, fd_set *rfds, fd_set *wfds,
-                             fd_set *xfds, struct timeval *tv)
+                             fd_set *xfds, uint32_t *cur_timeout)
 {
     GMainContext *context = g_main_context_default();
     int i;
-    int timeout = 0, cur_timeout;
+    int timeout = 0;
 
     g_main_context_prepare(context, &max_priority);
 
@@ -252,10 +252,8 @@ static void glib_select_fill(int *max_fd, fd_set *rfds, fd_set *wfds,
         }
     }
 
-    cur_timeout = (tv->tv_sec * 1000) + ((tv->tv_usec + 500) / 1000);
-    if (timeout >= 0 && timeout < cur_timeout) {
-        tv->tv_sec = timeout / 1000;
-        tv->tv_usec = (timeout % 1000) * 1000;
+    if (timeout >= 0 && timeout < *cur_timeout) {
+        *cur_timeout = timeout;
     }
 }
 
@@ -430,8 +428,6 @@ int main_loop_wait(int nonblocking)
         qemu_bh_update_timeout(&timeout);
     }
 
-    os_host_main_loop_wait(&timeout);
-
     /* poll any events */
     /* XXX: separate device handlers from system ones */
     nfds = -1;
@@ -444,7 +440,9 @@ int main_loop_wait(int nonblocking)
     slirp_select_fill(&nfds, &rfds, &wfds, &xfds);
 #endif
     qemu_iohandler_fill(&nfds, &rfds, &wfds, &xfds);
-    glib_select_fill(&nfds, &rfds, &wfds, &xfds, &tv);
+
+    glib_select_fill(&nfds, &rfds, &wfds, &xfds, &timeout);
+    os_host_main_loop_wait(&timeout);
 
     if (timeout < UINT32_MAX) {
         tvarg = &tv;
