@@ -385,6 +385,9 @@ void xen_invalidate_map_cache(void)
         if (entry->vaddr_base == NULL) {
             continue;
         }
+        if (entry->lock > 0) {
+            continue;
+        }
 
         if (munmap(entry->vaddr_base, entry->size) != 0) {
             perror("unmap fails");
