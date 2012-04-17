@@ -133,6 +133,6 @@ static inline int xc_fd(xc_interface *xen_xc)
 }
 #endif
 
-void destroy_hvm_domain(void);
+void destroy_hvm_domain(bool reboot);
 
 #endif /* QEMU_HW_XEN_COMMON_H */
