@@ -368,7 +368,7 @@ void qemu_del_wait_object(HANDLE handle, WaitObjectFunc *func, void *opaque)
     }
 }
 
-static void os_host_main_loop_wait(int *timeout)
+static void os_host_main_loop_wait(uint32_t *timeout)
 {
     int ret, ret2, i;
     PollingEntry *pe;
@@ -412,7 +412,7 @@ static void os_host_main_loop_wait(int *timeout)
     *timeout = 0;
 }
 #else
-static inline void os_host_main_loop_wait(int *timeout)
+static inline void os_host_main_loop_wait(uint32_t *timeout)
 {
 }
 #endif
@@ -421,20 +421,16 @@ int main_loop_wait(int nonblocking)
 {
     fd_set rfds, wfds, xfds;
     int ret, nfds;
-    struct timeval tv;
-    int timeout;
+    struct timeval tv, *tvarg = NULL;
+    uint32_t timeout = UINT32_MAX;
 
     if (nonblocking) {
         timeout = 0;
     } else {
-        timeout = qemu_calculate_timeout();
         qemu_bh_update_timeout(&timeout);
     }
 
     os_host_main_loop_wait(&timeout);
-
-    tv.tv_sec = timeout / 1000;
-    tv.tv_usec = (timeout % 1000) * 1000;
 
     /* poll any events */
     /* XXX: separate device handlers from system ones */
@@ -444,16 +440,23 @@ int main_loop_wait(int nonblocking)
     FD_ZERO(&xfds);
 
 #ifdef CONFIG_SLIRP
+    slirp_update_timeout(&timeout);
     slirp_select_fill(&nfds, &rfds, &wfds, &xfds);
 #endif
     qemu_iohandler_fill(&nfds, &rfds, &wfds, &xfds);
     glib_select_fill(&nfds, &rfds, &wfds, &xfds, &tv);
 
+    if (timeout < UINT32_MAX) {
+        tvarg = &tv;
+        tv.tv_sec = timeout / 1000;
+        tv.tv_usec = (timeout % 1000) * 1000;
+    }
+
     if (timeout > 0) {
         qemu_mutex_unlock_iothread();
     }
 
-    ret = select(nfds + 1, &rfds, &wfds, &xfds, &tv);
+    ret = select(nfds + 1, &rfds, &wfds, &xfds, tvarg);
 
     if (timeout > 0) {
         qemu_mutex_lock_iothread();
