@@ -238,7 +238,7 @@ struct BlockDriverAIOCB {
     BlockDriverAIOCB *next;
 };
 
-void get_tmp_filename(char *filename, int size);
+int get_tmp_filename(char *filename, int size);
 
 void *qemu_aio_get(AIOPool *pool, BlockDriverState *bs,
                    BlockDriverCompletionFunc *cb, void *opaque);
