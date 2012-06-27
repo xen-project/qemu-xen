@@ -1314,7 +1314,7 @@ if test "$xen" != "no" ; then
   # Xen unstable
   cat > $TMPC <<EOF
 #include <xenctrl.h>
-#include <xs.h>
+#include <xenstore.h>
 #include <stdint.h>
 #include <xen/hvm/hvm_info_table.h>
 #if !defined(HVM_MAX_VCPUS)
