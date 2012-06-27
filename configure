@@ -1331,8 +1331,7 @@ int main(void) {
   return 0;
 }
 EOF
-      compile_prog "" "$xen_libs"
-    ) ; then
+  if compile_prog "" "$xen_libs" ; then
     xen_ctrl_version=420
     xen=yes
 
@@ -1355,7 +1354,8 @@ int main(void) {
   return 0;
 }
 EOF
-  if compile_prog "" "$xen_libs" ; then
+      compile_prog "" "$xen_libs"
+    ) ; then
     xen_ctrl_version=410
     xen=yes
 
