@@ -8,6 +8,7 @@
 
 #include "qemu-common.h"
 #include "hw/xen.h"
+#include "qmp-commands.h"
 
 void xenstore_store_pv_console_info(int i, CharDriverState *chr)
 {
@@ -42,4 +43,8 @@ qemu_irq *xen_interrupt_controller_init(void)
 int xen_init(void)
 {
     return -ENOSYS;
+}
+
+void qmp_xen_set_global_dirty_log(bool enable, Error **errp)
+{
 }

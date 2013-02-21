@@ -12,6 +12,7 @@
 #include "hw/pc.h"
 #include "hw/xen_common.h"
 #include "hw/xen_backend.h"
+#include "qmp-commands.h"
 
 #include "range.h"
 #include "xen-mapcache.h"
@@ -523,6 +524,11 @@ static CPUPhysMemoryClient xen_cpu_phys_memory_client = {
     .log_start = xen_log_start,
     .log_stop = xen_log_stop,
 };
+
+void qmp_xen_set_global_dirty_log(bool enable, Error **errp)
+{
+    cpu_physical_memory_set_dirty_tracking(!!enable);
+}
 
 /* VCPU Operations, MMIO, IO ring ... */
 
