@@ -470,7 +470,21 @@ static int xen_sync_dirty_bitmap(XenIOState *state,
     rc = xc_hvm_track_dirty_vram(xen_xc, xen_domid,
                                  start_addr >> TARGET_PAGE_BITS, npages,
                                  bitmap);
-    if (rc) {
+    if (rc < 0) {
+        if (rc != -ENODATA) {
+            ram_addr_t addr, end;
+
+            xen_modified_memory(start_addr, size);
+            
+            end = TARGET_PAGE_ALIGN(start_addr + size);
+            for (addr = start_addr & TARGET_PAGE_MASK; addr < end; addr += TARGET_PAGE_SIZE) {
+                cpu_physical_memory_set_dirty(addr);
+            }
+
+            DPRINTF("xen: track_dirty_vram failed (0x" TARGET_FMT_plx
+                    ", 0x" TARGET_FMT_plx "): %s\n",
+                    start_addr, start_addr + size, strerror(-rc));
+        }
         return rc;
     }
 
@@ -479,7 +493,9 @@ static int xen_sync_dirty_bitmap(XenIOState *state,
         while (map != 0) {
             j = ffsl(map) - 1;
             map &= ~(1ul << j);
-            cpu_physical_memory_set_dirty(vram_offset + (i * width + j) * TARGET_PAGE_SIZE);
+            target_phys_addr_t todirty = vram_offset + (i * width + j) * TARGET_PAGE_SIZE;
+            xen_modified_memory(todirty, TARGET_PAGE_SIZE);
+            cpu_physical_memory_set_dirty(todirty);
         };
     }
 
