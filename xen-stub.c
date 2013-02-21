@@ -48,3 +48,7 @@ int xen_init(void)
 void qmp_xen_set_global_dirty_log(bool enable, Error **errp)
 {
 }
+
+void xen_modified_memory(ram_addr_t start, ram_addr_t length)
+{
+}

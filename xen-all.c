@@ -1135,3 +1135,24 @@ void destroy_hvm_domain(bool reboot)
         xc_interface_close(xc_handle);
     }
 }
+
+void xen_modified_memory(ram_addr_t start, ram_addr_t length)
+{
+    if (unlikely(cpu_physical_memory_get_dirty_tracking())) {
+        int rc;
+        ram_addr_t start_pfn, nb_pages;
+
+        if (length == 0) {
+            length = TARGET_PAGE_SIZE;
+        }
+        start_pfn = start >> TARGET_PAGE_BITS;
+        nb_pages = ((start + length + TARGET_PAGE_SIZE - 1) >> TARGET_PAGE_BITS)
+            - start_pfn;
+        rc = xc_hvm_modified_memory(xen_xc, xen_domid, start_pfn, nb_pages);
+        if (rc) {
+            fprintf(stderr,
+                    "%s failed for "RAM_ADDR_FMT" ("RAM_ADDR_FMT"): %i, %s\n",
+                    __func__, start, nb_pages, rc, strerror(-rc));
+        }
+    }
+}
