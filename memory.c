@@ -16,6 +16,7 @@
 #include "ioport.h"
 #include "bitops.h"
 #include "kvm.h"
+#include "hw/xen.h"
 #include <assert.h>
 
 unsigned memory_region_transaction_depth = 0;
@@ -1065,6 +1066,9 @@ bool memory_region_get_dirty(MemoryRegion *mr, target_phys_addr_t addr,
 void memory_region_set_dirty(MemoryRegion *mr, target_phys_addr_t addr)
 {
     assert(mr->terminates);
+    if (xen_enabled())
+        xen_modified_memory((mr->ram_addr + addr) & TARGET_PAGE_MASK,
+                            TARGET_PAGE_SIZE);
     return cpu_physical_memory_set_dirty(mr->ram_addr + addr);
 }
 
