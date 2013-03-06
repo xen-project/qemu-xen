@@ -472,18 +472,17 @@ static int xen_sync_dirty_bitmap(XenIOState *state,
                                  bitmap);
     if (rc < 0) {
         if (rc != -ENODATA) {
-            ram_addr_t addr, end;
-
-            xen_modified_memory(start_addr, size);
-            
-            end = TARGET_PAGE_ALIGN(start_addr + size);
-            for (addr = start_addr & TARGET_PAGE_MASK; addr < end; addr += TARGET_PAGE_SIZE) {
-                cpu_physical_memory_set_dirty(addr);
-            }
+            target_phys_addr_t todirty;
 
             DPRINTF("xen: track_dirty_vram failed (0x" TARGET_FMT_plx
                     ", 0x" TARGET_FMT_plx "): %s\n",
                     start_addr, start_addr + size, strerror(-rc));
+
+            xen_modified_memory(vram_offset, npages * TARGET_PAGE_SIZE);
+
+            for (todirty = vram_offset, i=0; i < npages; todirty += TARGET_PAGE_SIZE, i++) {
+                cpu_physical_memory_set_dirty(todirty);
+            }
         }
         return rc;
     }
