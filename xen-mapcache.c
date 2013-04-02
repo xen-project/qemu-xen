@@ -198,6 +198,7 @@ uint8_t *xen_map_cache(target_phys_addr_t phys_addr, target_phys_addr_t size,
     target_phys_addr_t address_index;
     target_phys_addr_t address_offset;
     target_phys_addr_t __size = size;
+    target_phys_addr_t __test_bit_size = size;
     bool translated = false;
 
 tryagain:
@@ -206,9 +207,23 @@ tryagain:
 
     trace_xen_map_cache(phys_addr);
 
+    /* __test_bit_size is always a multiple of XC_PAGE_SIZE */
+    if (size) {
+        __test_bit_size = size + (phys_addr & (XC_PAGE_SIZE - 1));
+
+        if (__test_bit_size % XC_PAGE_SIZE) {
+            __test_bit_size += XC_PAGE_SIZE - (__test_bit_size % XC_PAGE_SIZE);
+        }
+    } else {
+        __test_bit_size = XC_PAGE_SIZE;
+    }
+
     if (mapcache->last_entry != NULL &&
         mapcache->last_entry->paddr_index == address_index &&
-        !lock && !__size) {
+        !lock && !__size &&
+        test_bits(address_offset >> XC_PAGE_SHIFT,
+                  __test_bit_size >> XC_PAGE_SHIFT,
+                  mapcache->last_entry->valid_mapping)) {
         trace_xen_map_cache_return(mapcache->last_entry->vaddr_base + address_offset);
         return mapcache->last_entry->vaddr_base + address_offset;
     }
@@ -227,7 +242,8 @@ tryagain:
 
     while (entry && entry->lock && entry->vaddr_base &&
             (entry->paddr_index != address_index || entry->size != __size ||
-             !test_bits(address_offset >> XC_PAGE_SHIFT, size >> XC_PAGE_SHIFT,
+             !test_bits(address_offset >> XC_PAGE_SHIFT,
+                 __test_bit_size >> XC_PAGE_SHIFT,
                  entry->valid_mapping))) {
         pentry = entry;
         entry = entry->next;
@@ -239,13 +255,15 @@ tryagain:
     } else if (!entry->lock) {
         if (!entry->vaddr_base || entry->paddr_index != address_index ||
                 entry->size != __size ||
-                !test_bits(address_offset >> XC_PAGE_SHIFT, size >> XC_PAGE_SHIFT,
+                !test_bits(address_offset >> XC_PAGE_SHIFT,
+                    __test_bit_size >> XC_PAGE_SHIFT,
                     entry->valid_mapping)) {
             xen_remap_bucket(entry, __size, address_index);
         }
     }
 
-    if(!test_bits(address_offset >> XC_PAGE_SHIFT, size >> XC_PAGE_SHIFT,
+    if(!test_bits(address_offset >> XC_PAGE_SHIFT,
+                __test_bit_size >> XC_PAGE_SHIFT,
                 entry->valid_mapping)) {
         mapcache->last_entry = NULL;
         if (!translated && mapcache->phys_offset_to_gaddr) {
