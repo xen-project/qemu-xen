@@ -41,6 +41,7 @@ typedef struct CPUState CPUState;
 /**
  * CPUClass:
  * @reset: Callback to reset the #CPUState to its initial state.
+ * @get_arch_id: Callback for getting architecture-dependent CPU ID.
  *
  * Represents a CPU family or model.
  */
@@ -50,6 +51,7 @@ typedef struct CPUClass {
     /*< public >*/
 
     void (*reset)(CPUState *cpu);
+    int64_t (*get_arch_id)(CPUState *cpu);
 } CPUClass;
 
 /**
