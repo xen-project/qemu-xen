@@ -692,6 +692,16 @@ CPUArchState *qemu_get_cpu(int cpu)
     return env;
 }
 
+void qemu_for_each_cpu(void (*func)(CPUState *cpu, void *data), void *data)
+{
+    CPUArchState *env = first_cpu;
+
+    while (env) {
+        func(ENV_GET_CPU(env), data);
+        env = env->next_cpu;
+    }
+}
+
 void cpu_exec_init(CPUArchState *env)
 {
 #ifndef CONFIG_USER_ONLY
