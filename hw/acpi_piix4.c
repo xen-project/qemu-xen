@@ -28,6 +28,7 @@
 #include "range.h"
 #include "ioport.h"
 #include "fw_cfg.h"
+#include "qemu/cpu.h"
 
 //#define DEBUG
 
@@ -46,16 +47,26 @@
 #define PCI_EJ_BASE 0xae08
 #define PCI_RMV_BASE 0xae0c
 
+#define PIIX4_PROC_BASE 0xaf00
+#define PIIX4_PROC_LEN 32
+
 #define PIIX4_PCI_HOTPLUG_STATUS 2
+#define PIIX4_CPU_HOTPLUG_STATUS 4
 
 struct pci_status {
     uint32_t up; /* deprecated, maintained for migration compatibility */
     uint32_t down;
 };
 
+typedef struct CPUStatus {
+    uint8_t sts[PIIX4_PROC_LEN];
+} CPUStatus;
+
 typedef struct PIIX4PMState {
     PCIDevice dev;
     IORange ioport;
+
+    MemoryRegion io_cpu;
     ACPIREGS ar;
 
     APMState apm;
@@ -77,6 +88,8 @@ typedef struct PIIX4PMState {
     uint8_t disable_s3;
     uint8_t disable_s4;
     uint8_t s4_val;
+
+    CPUStatus gpe_cpu;
 } PIIX4PMState;
 
 static void piix4_acpi_system_hot_add_init(PCIBus *bus, PIIX4PMState *s);
@@ -94,8 +107,8 @@ static void pm_update_sci(PIIX4PMState *s)
                    ACPI_BITMASK_POWER_BUTTON_ENABLE |
                    ACPI_BITMASK_GLOBAL_LOCK_ENABLE |
                    ACPI_BITMASK_TIMER_ENABLE)) != 0) ||
-        (((s->ar.gpe.sts[0] & s->ar.gpe.en[0])
-          & PIIX4_PCI_HOTPLUG_STATUS) != 0);
+        (((s->ar.gpe.sts[0] & s->ar.gpe.en[0]) &
+          (PIIX4_PCI_HOTPLUG_STATUS | PIIX4_CPU_HOTPLUG_STATUS)) != 0);
 
     qemu_set_irq(s->irq, sci_level);
     /* schedule a timer interruption if needed */
@@ -602,6 +615,63 @@ static uint32_t pcirmv_read(void *opaque, uint32_t addr)
     return s->pci0_hotplug_enable;
 }
 
+static uint64_t cpu_status_read(void *opaque, hwaddr addr, unsigned int size)
+{
+    PIIX4PMState *s = opaque;
+    CPUStatus *cpus = &s->gpe_cpu;
+    uint64_t val = cpus->sts[addr];
+
+    return val;
+}
+
+static void cpu_status_write(void *opaque, hwaddr addr, uint64_t data,
+                             unsigned int size)
+{
+    /* TODO: implement VCPU removal on guest signal that CPU can be removed */
+}
+
+static const MemoryRegionOps cpu_hotplug_ops = {
+    .read = cpu_status_read,
+    .write = cpu_status_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = {
+        .min_access_size = 1,
+        .max_access_size = 1,
+    },
+};
+
+typedef enum {
+    PLUG,
+    UNPLUG,
+} HotplugEventType;
+
+static void piix4_cpu_hotplug_req(PIIX4PMState *s, int64_t cpu_id,
+                                  HotplugEventType action)
+{
+    CPUStatus *g = &s->gpe_cpu;
+    ACPIGPE *gpe = &s->ar.gpe;
+
+    assert(s != NULL);
+
+    *gpe->sts = *gpe->sts | PIIX4_CPU_HOTPLUG_STATUS;
+    if (action == PLUG) {
+        g->sts[cpu_id / 8] |= (1 << (cpu_id % 8));
+    } else {
+        g->sts[cpu_id / 8] &= ~(1 << (cpu_id % 8));
+    }
+    pm_update_sci(s);
+}
+
+static void piix4_init_cpu_status(CPUState *cpu, void *data)
+{
+    CPUStatus *g = (CPUStatus *)data;
+    CPUClass *k = CPU_GET_CLASS(cpu);
+    int64_t id = k->get_arch_id(cpu);
+
+    g_assert((id / 8) < PIIX4_PROC_LEN);
+    g->sts[id / 8] |= (1 << (id % 8));
+}
+
 static int piix4_device_hotplug(DeviceState *qdev, PCIDevice *dev,
                                 PCIHotplugState state);
 
@@ -621,6 +691,12 @@ static void piix4_acpi_system_hot_add_init(PCIBus *bus, PIIX4PMState *s)
     register_ioport_read(PCI_RMV_BASE, 4, 4,  pcirmv_read, s);
 
     pci_bus_hotplug(bus, piix4_device_hotplug, &s->dev.qdev);
+
+    qemu_for_each_cpu(piix4_init_cpu_status, &s->gpe_cpu);
+    memory_region_init_io(&s->io_cpu, &cpu_hotplug_ops, s, "apci-cpu-hotplug",
+                          PIIX4_PROC_LEN);
+    memory_region_add_subregion(pci_address_space_io(&s->dev),
+                                PIIX4_PROC_BASE, &s->io_cpu);
 }
 
 static void enable_device(PIIX4PMState *s, int slot)
