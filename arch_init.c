@@ -535,9 +535,13 @@ static void sort_ram_list(void)
 
 static void migration_end(void)
 {
-    memory_global_dirty_log_stop();
+    if (migration_bitmap) {
+        memory_global_dirty_log_stop();
+        g_free(migration_bitmap);
+        migration_bitmap = NULL;
+    }
 
-    if (migrate_use_xbzrle()) {
+    if (XBZRLE.cache) {
         cache_fini(XBZRLE.cache);
         g_free(XBZRLE.cache);
         g_free(XBZRLE.encoded_buf);
@@ -568,7 +572,7 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
     int64_t ram_pages = last_ram_offset() >> TARGET_PAGE_BITS;
 
     migration_bitmap = bitmap_new(ram_pages);
-    bitmap_set(migration_bitmap, 1, ram_pages);
+    bitmap_set(migration_bitmap, 0, ram_pages);
     migration_dirty_pages = ram_pages;
 
     bytes_transferred = 0;
@@ -689,12 +693,9 @@ static int ram_save_complete(QEMUFile *f, void *opaque)
         }
         bytes_transferred += bytes_sent;
     }
-    memory_global_dirty_log_stop();
+    migration_end();
 
     qemu_put_be64(f, RAM_SAVE_FLAG_EOS);
-
-    g_free(migration_bitmap);
-    migration_bitmap = NULL;
 
     return 0;
 }
@@ -840,7 +841,8 @@ static int ram_load(QEMUFile *f, void *opaque, int version_id)
             memset(host, ch, TARGET_PAGE_SIZE);
 #ifndef _WIN32
             if (ch == 0 &&
-                (!kvm_enabled() || kvm_has_sync_mmu())) {
+                (!kvm_enabled() || kvm_has_sync_mmu()) &&
+                getpagesize() <= TARGET_PAGE_SIZE) {
                 qemu_madvise(host, TARGET_PAGE_SIZE, QEMU_MADV_DONTNEED);
             }
 #endif
