@@ -25,11 +25,7 @@ extern int xen_allowed;
 
 static inline int xen_enabled(void)
 {
-#if defined(CONFIG_XEN_BACKEND) && !defined(CONFIG_NO_XEN)
     return xen_allowed;
-#else
-    return 0;
-#endif
 }
 
 int xen_pci_slot_get_pirq(PCIDevice *pci_dev, int irq_num);
