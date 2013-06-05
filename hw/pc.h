@@ -78,6 +78,9 @@ extern int fd_bootchk;
 void pc_register_ferr_irq(qemu_irq irq);
 void pc_acpi_smi_interrupt(void *opaque, int irq, int level);
 
+#define QEMU_BELOW_4G_RAM_END       0xe0000000
+#define QEMU_BELOW_4G_MMIO_LENGTH   ((1ULL << 32) - QEMU_BELOW_4G_RAM_END)
+
 void pc_cpus_init(const char *cpu_model);
 void *pc_memory_init(MemoryRegion *system_memory,
                     const char *kernel_filename,
