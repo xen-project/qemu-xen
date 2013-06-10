@@ -662,6 +662,26 @@ static void piix4_cpu_hotplug_req(PIIX4PMState *s, int64_t cpu_id,
     pm_update_sci(s);
 }
 
+static PIIX4PMState *piix4pm_state;
+void piix4_cpu_hotplug_add(const int64_t cpu_id, Error **errp)
+{
+    CPUStatus *g = &piix4pm_state->gpe_cpu;
+
+    if (cpu_id >= max_cpus) {
+        error_setg(errp, "Unable to add CPU: %" PRIi64
+                   ", max allowed: %d", cpu_id, max_cpus - 1);
+        return;
+    }
+    if (g->sts[cpu_id / 8] & (1 << (cpu_id % 8))) {
+        /* Already requested to be hotplug. */
+        error_setg(errp, "Unable to add CPU: %" PRIi64
+                   ", it already exists", cpu_id);
+        return;
+    }
+
+    piix4_cpu_hotplug_req(piix4pm_state, cpu_id, PLUG);
+}
+
 static void piix4_init_cpu_status(CPUState *cpu, void *data)
 {
     CPUStatus *g = (CPUStatus *)data;
@@ -697,6 +717,7 @@ static void piix4_acpi_system_hot_add_init(PCIBus *bus, PIIX4PMState *s)
                           PIIX4_PROC_LEN);
     memory_region_add_subregion(pci_address_space_io(&s->dev),
                                 PIIX4_PROC_BASE, &s->io_cpu);
+    piix4pm_state = s;
 }
 
 static void enable_device(PIIX4PMState *s, int slot)
