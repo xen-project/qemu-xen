@@ -41,6 +41,7 @@ typedef struct CPUState CPUState;
 /**
  * CPUClass:
  * @reset: Callback to reset the #CPUState to its initial state.
+ * @get_arch_id: Callback for getting architecture-dependent CPU ID.
  *
  * Represents a CPU family or model.
  */
@@ -50,6 +51,7 @@ typedef struct CPUClass {
     /*< public >*/
 
     void (*reset)(CPUState *cpu);
+    int64_t (*get_arch_id)(CPUState *cpu);
 } CPUClass;
 
 /**
@@ -135,6 +137,15 @@ bool cpu_is_stopped(CPUState *cpu);
  * Schedules the function @func for execution on the vCPU @cpu.
  */
 void run_on_cpu(CPUState *cpu, void (*func)(void *data), void *data);
+
+/**
+ * qemu_for_each_cpu:
+ * @func: The function to be executed.
+ * @data: Data to pass to the function.
+ *
+ * Executes @func for each CPU.
+ */
+void qemu_for_each_cpu(void (*func)(CPUState *cpu, void *data), void *data);
 
 
 #endif

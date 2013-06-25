@@ -183,4 +183,6 @@ char *get_boot_devices_list(uint32_t *size);
 
 bool usb_enabled(bool default_usb);
 
+void piix4_cpu_hotplug_add(const int64_t cpu_id, Error **errp);
+
 #endif

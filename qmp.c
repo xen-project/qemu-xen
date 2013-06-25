@@ -23,6 +23,7 @@
 #include "hw/qdev.h"
 #include "blockdev.h"
 #include "qemu/qom-qobject.h"
+#include "hw/boards.h"
 
 NameInfo *qmp_query_name(Error **errp)
 {
@@ -105,6 +106,15 @@ void qmp_system_powerdown(Error **erp)
 void qmp_cpu(int64_t index, Error **errp)
 {
     /* Just do nothing */
+}
+
+void qmp_cpu_add(int64_t id, Error **errp)
+{
+    if (current_machine->hot_add_cpu) {
+        current_machine->hot_add_cpu(id, errp);
+    } else {
+        error_setg(errp, "Not supported");
+    }
 }
 
 #ifndef CONFIG_VNC
