@@ -186,7 +186,7 @@ static void become_daemon(const char *pidfile)
         goto fail;
     }
 
-    umask(0);
+    umask(S_IRWXG | S_IRWXO);
     sid = setsid();
     if (sid < 0) {
         goto fail;
