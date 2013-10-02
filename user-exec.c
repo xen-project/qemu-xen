@@ -18,8 +18,9 @@
  */
 #include "config.h"
 #include "cpu.h"
-#include "disas.h"
+#include "disas/disas.h"
 #include "tcg.h"
+#include "qemu/bitops.h"
 
 #undef EAX
 #undef ECX
@@ -70,7 +71,7 @@ void cpu_resume_from_signal(CPUArchState *env1, void *puc)
 #endif
     }
     env1->exception_index = -1;
-    longjmp(env1->jmp_env, 1);
+    siglongjmp(env1->jmp_env, 1);
 }
 
 /* 'pc' is the host PC at which the exception was raised. 'address' is
@@ -81,7 +82,7 @@ static inline int handle_cpu_signal(uintptr_t pc, unsigned long address,
                                     int is_write, sigset_t *old_set,
                                     void *puc)
 {
-    TranslationBlock *tb;
+    CPUArchState *env;
     int ret;
 
 #if defined(DEBUG_SIGNAL)
@@ -94,9 +95,13 @@ static inline int handle_cpu_signal(uintptr_t pc, unsigned long address,
         return 1;
     }
 
+    /* Convert forcefully to guest address space, invalid addresses
+       are still valid segv ones */
+    address = h2g_nocheck(address);
+
+    env = current_cpu->env_ptr;
     /* see if it is an MMU fault */
-    ret = cpu_handle_mmu_fault(cpu_single_env, address, is_write,
-                               MMU_USER_IDX);
+    ret = cpu_handle_mmu_fault(env, address, is_write, MMU_USER_IDX);
     if (ret < 0) {
         return 0; /* not an MMU fault */
     }
@@ -104,17 +109,12 @@ static inline int handle_cpu_signal(uintptr_t pc, unsigned long address,
         return 1; /* the MMU fault was handled without causing real CPU fault */
     }
     /* now we have a real cpu fault */
-    tb = tb_find_pc(pc);
-    if (tb) {
-        /* the PC is inside the translated code. It means that we have
-           a virtual CPU fault */
-        cpu_restore_state(tb, cpu_single_env, pc);
-    }
+    cpu_restore_state(env, pc);
 
     /* we restore the process signal mask as the sigreturn should
        do it (XXX: use sigsetjmp) */
     sigprocmask(SIG_SETMASK, old_set, NULL);
-    exception_action(cpu_single_env);
+    exception_action(env);
 
     /* never comes here */
     return 1;
@@ -442,16 +442,34 @@ int cpu_signal_handler(int host_signum, void *pinfo,
     unsigned long pc;
     int is_write;
 
-#if (__GLIBC__ < 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ <= 3))
+#if defined(__GLIBC__) && (__GLIBC__ < 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ <= 3))
     pc = uc->uc_mcontext.gregs[R15];
 #else
     pc = uc->uc_mcontext.arm_pc;
 #endif
-    /* XXX: compute is_write */
-    is_write = 0;
+
+    /* error_code is the FSR value, in which bit 11 is WnR (assuming a v6 or
+     * later processor; on v5 we will always report this as a read).
+     */
+    is_write = extract32(uc->uc_mcontext.error_code, 11, 1);
     return handle_cpu_signal(pc, (unsigned long)info->si_addr,
                              is_write,
                              &uc->uc_sigmask, puc);
+}
+
+#elif defined(__aarch64__)
+
+int cpu_signal_handler(int host_signum, void *pinfo,
+                       void *puc)
+{
+    siginfo_t *info = pinfo;
+    struct ucontext *uc = puc;
+    uint64_t pc;
+    int is_write = 0; /* XXX how to determine? */
+
+    pc = uc->uc_mcontext.pc;
+    return handle_cpu_signal(pc, (uint64_t)info->si_addr,
+                             is_write, &uc->uc_sigmask, puc);
 }
 
 #elif defined(__mc68000)

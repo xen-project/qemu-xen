@@ -4,6 +4,10 @@
    most of them stay the same, so we handle it by putting ifdefs if
    necessary */
 
+#ifndef SYSCALL_DEFS_H
+#define SYSCALL_DEFS_H 1
+
+
 #include "syscall_nr.h"
 
 #define SOCKOP_socket           1
@@ -540,7 +544,7 @@ int do_sigaction(int sig, const struct target_sigaction *act,
 struct target_old_sigaction {
     abi_ulong _sa_handler;
     abi_ulong sa_mask;
-    abi_ulong sa_flags;
+    int32_t sa_flags;
 };
 
 struct target_rt_sigaction {
@@ -1134,8 +1138,7 @@ struct target_winsize {
 #endif
 
 #if (defined(TARGET_I386) && defined(TARGET_ABI32)) || defined(TARGET_ARM) \
-    || defined(TARGET_CRIS) || defined(TARGET_UNICORE32) \
-    || defined(TARGET_OPENRISC)
+    || defined(TARGET_CRIS) || defined(TARGET_UNICORE32)
 struct target_stat {
 	unsigned short st_dev;
 	unsigned short __pad1;
@@ -1833,29 +1836,55 @@ struct target_stat {
     abi_ulong  __unused[3];
 };
 #elif defined(TARGET_OPENRISC)
+
+/* These are the asm-generic versions of the stat and stat64 structures */
+
 struct target_stat {
     abi_ulong st_dev;
     abi_ulong st_ino;
-    abi_ulong st_nlink;
-
     unsigned int st_mode;
+    unsigned int st_nlink;
     unsigned int st_uid;
     unsigned int st_gid;
-    unsigned int __pad0;
     abi_ulong st_rdev;
+    abi_ulong __pad1;
     abi_long st_size;
-    abi_long st_blksize;
-    abi_long st_blocks;    /* Number 512-byte blocks allocated. */
-
-    abi_ulong target_st_atime;
+    int st_blksize;
+    int __pad2;
+    abi_long st_blocks;
+    abi_long target_st_atime;
     abi_ulong target_st_atime_nsec;
-    abi_ulong target_st_mtime;
+    abi_long target_st_mtime;
     abi_ulong target_st_mtime_nsec;
-    abi_ulong target_st_ctime;
+    abi_long target_st_ctime;
     abi_ulong target_st_ctime_nsec;
-
-    abi_long __unused[3];
+    unsigned int __unused4;
+    unsigned int __unused5;
 };
+
+struct target_stat64 {
+    uint64_t st_dev;
+    uint64_t st_ino;
+    unsigned int st_mode;
+    unsigned int st_nlink;
+    unsigned int st_uid;
+    unsigned int st_gid;
+    uint64_t st_rdev;
+    uint64_t __pad1;
+    int64_t st_size;
+    int st_blksize;
+    int __pad2;
+    int64_t st_blocks;
+    int target_st_atime;
+    unsigned int target_st_atime_nsec;
+    int target_st_mtime;
+    unsigned int target_st_mtime_nsec;
+    int target_st_ctime;
+    unsigned int target_st_ctime_nsec;
+    unsigned int __unused4;
+    unsigned int __unused5;
+};
+
 #else
 #error unsupported CPU
 #endif
@@ -2013,6 +2042,12 @@ struct target_statfs64 {
 #define TARGET_F_SETLKW        9
 #define TARGET_F_SETOWN        5       /*  for sockets. */
 #define TARGET_F_GETOWN        6       /*  for sockets. */
+
+#define TARGET_F_RDLCK         1
+#define TARGET_F_WRLCK         2
+#define TARGET_F_UNLCK         8
+#define TARGET_F_EXLCK         16
+#define TARGET_F_SHLCK         32
 #elif defined(TARGET_MIPS)
 #define TARGET_F_GETLK         14
 #define TARGET_F_SETLK         6
@@ -2026,6 +2061,18 @@ struct target_statfs64 {
 #define TARGET_F_SETOWN        8       /*  for sockets. */
 #define TARGET_F_GETOWN        9       /*  for sockets. */
 #endif
+
+#ifndef TARGET_F_RDLCK
+#define TARGET_F_RDLCK         0
+#define TARGET_F_WRLCK         1
+#define TARGET_F_UNLCK         2
+#endif
+
+#ifndef TARGET_F_EXLCK
+#define TARGET_F_EXLCK         4
+#define TARGET_F_SHLCK         8
+#endif
+
 
 #define TARGET_F_SETSIG        10      /*  for sockets. */
 #define TARGET_F_GETSIG        11      /*  for sockets. */
@@ -2412,8 +2459,11 @@ typedef union target_epoll_data {
 
 struct target_epoll_event {
     uint32_t events;
+#ifdef TARGET_ARM
+    uint32_t __pad;
+#endif
     target_epoll_data_t data;
-};
+} QEMU_PACKED;
 #endif
 struct target_rlimit64 {
     uint64_t rlim_cur;
@@ -2425,3 +2475,5 @@ struct target_ucred {
     uint32_t uid;
     uint32_t gid;
 };
+
+#endif

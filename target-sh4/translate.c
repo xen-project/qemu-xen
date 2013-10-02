@@ -21,7 +21,7 @@
 //#define SH4_SINGLE_STEP
 
 #include "cpu.h"
-#include "disas.h"
+#include "disas/disas.h"
 #include "tcg-op.h"
 
 #include "helper.h"
@@ -69,9 +69,9 @@ static TCGv cpu_flags, cpu_delayed_pc;
 
 static uint32_t gen_opc_hflags[OPC_BUF_SIZE];
 
-#include "gen-icount.h"
+#include "exec/gen-icount.h"
 
-static void sh4_translate_init(void)
+void sh4_translate_init(void)
 {
     int i;
     static int done_init = 0;
@@ -150,10 +150,11 @@ static void sh4_translate_init(void)
     done_init = 1;
 }
 
-void cpu_dump_state(CPUSH4State * env, FILE * f,
-		    int (*cpu_fprintf) (FILE * f, const char *fmt, ...),
-		    int flags)
+void superh_cpu_dump_state(CPUState *cs, FILE *f,
+                           fprintf_function cpu_fprintf, int flags)
 {
+    SuperHCPU *cpu = SUPERH_CPU(cs);
+    CPUSH4State *env = &cpu->env;
     int i;
     cpu_fprintf(f, "pc=0x%08x sr=0x%08x pr=0x%08x fpscr=0x%08x\n",
 		env->pc, env->sr, env->pr, env->fpscr);
@@ -173,90 +174,6 @@ void cpu_dump_state(CPUSH4State * env, FILE * f,
 	cpu_fprintf(f, "in conditional delay slot (delayed_pc=0x%08x)\n",
 		    env->delayed_pc);
     }
-}
-
-typedef struct {
-    const char *name;
-    int id;
-    uint32_t pvr;
-    uint32_t prr;
-    uint32_t cvr;
-    uint32_t features;
-} sh4_def_t;
-
-static sh4_def_t sh4_defs[] = {
-    {
-	.name = "SH7750R",
-	.id = SH_CPU_SH7750R,
-	.pvr = 0x00050000,
-	.prr = 0x00000100,
-	.cvr = 0x00110000,
-	.features = SH_FEATURE_BCR3_AND_BCR4,
-    }, {
-	.name = "SH7751R",
-	.id = SH_CPU_SH7751R,
-	.pvr = 0x04050005,
-	.prr = 0x00000113,
-	.cvr = 0x00110000,	/* Neutered caches, should be 0x20480000 */
-	.features = SH_FEATURE_BCR3_AND_BCR4,
-    }, {
-	.name = "SH7785",
-	.id = SH_CPU_SH7785,
-	.pvr = 0x10300700,
-	.prr = 0x00000200,
-	.cvr = 0x71440211,
-	.features = SH_FEATURE_SH4A,
-     },
-};
-
-static const sh4_def_t *cpu_sh4_find_by_name(const char *name)
-{
-    int i;
-
-    if (strcasecmp(name, "any") == 0)
-	return &sh4_defs[0];
-
-    for (i = 0; i < ARRAY_SIZE(sh4_defs); i++)
-	if (strcasecmp(name, sh4_defs[i].name) == 0)
-	    return &sh4_defs[i];
-
-    return NULL;
-}
-
-void sh4_cpu_list(FILE *f, fprintf_function cpu_fprintf)
-{
-    int i;
-
-    for (i = 0; i < ARRAY_SIZE(sh4_defs); i++)
-	(*cpu_fprintf)(f, "%s\n", sh4_defs[i].name);
-}
-
-static void cpu_register(CPUSH4State *env, const sh4_def_t *def)
-{
-    env->pvr = def->pvr;
-    env->prr = def->prr;
-    env->cvr = def->cvr;
-    env->id = def->id;
-}
-
-SuperHCPU *cpu_sh4_init(const char *cpu_model)
-{
-    SuperHCPU *cpu;
-    CPUSH4State *env;
-    const sh4_def_t *def;
-
-    def = cpu_sh4_find_by_name(cpu_model);
-    if (!def)
-	return NULL;
-    cpu = SUPERH_CPU(object_new(TYPE_SUPERH_CPU));
-    env = &cpu->env;
-    env->features = def->features;
-    sh4_translate_init();
-    env->cpu_model_str = cpu_model;
-    cpu_reset(CPU(cpu));
-    cpu_register(env, def);
-    qemu_init_vcpu(env);
-    return cpu;
 }
 
 static void gen_goto_tb(DisasContext * ctx, int n, target_ulong dest)
@@ -833,36 +750,10 @@ static void _decode_opc(DisasContext * ctx)
         gen_helper_div1(REG(B11_8), cpu_env, REG(B7_4), REG(B11_8));
 	return;
     case 0x300d:		/* dmuls.l Rm,Rn */
-	{
-	    TCGv_i64 tmp1 = tcg_temp_new_i64();
-	    TCGv_i64 tmp2 = tcg_temp_new_i64();
-
-	    tcg_gen_ext_i32_i64(tmp1, REG(B7_4));
-	    tcg_gen_ext_i32_i64(tmp2, REG(B11_8));
-	    tcg_gen_mul_i64(tmp1, tmp1, tmp2);
-	    tcg_gen_trunc_i64_i32(cpu_macl, tmp1);
-	    tcg_gen_shri_i64(tmp1, tmp1, 32);
-	    tcg_gen_trunc_i64_i32(cpu_mach, tmp1);
-
-	    tcg_temp_free_i64(tmp2);
-	    tcg_temp_free_i64(tmp1);
-	}
+        tcg_gen_muls2_i32(cpu_macl, cpu_mach, REG(B7_4), REG(B11_8));
 	return;
     case 0x3005:		/* dmulu.l Rm,Rn */
-	{
-	    TCGv_i64 tmp1 = tcg_temp_new_i64();
-	    TCGv_i64 tmp2 = tcg_temp_new_i64();
-
-	    tcg_gen_extu_i32_i64(tmp1, REG(B7_4));
-	    tcg_gen_extu_i32_i64(tmp2, REG(B11_8));
-	    tcg_gen_mul_i64(tmp1, tmp1, tmp2);
-	    tcg_gen_trunc_i64_i32(cpu_macl, tmp1);
-	    tcg_gen_shri_i64(tmp1, tmp1, 32);
-	    tcg_gen_trunc_i64_i32(cpu_mach, tmp1);
-
-	    tcg_temp_free_i64(tmp2);
-	    tcg_temp_free_i64(tmp1);
-	}
+        tcg_gen_mulu2_i32(cpu_macl, cpu_mach, REG(B7_4), REG(B11_8));
 	return;
     case 0x600e:		/* exts.b Rm,Rn */
 	tcg_gen_ext8s_i32(REG(B11_8), REG(B7_4));
@@ -1955,9 +1846,11 @@ static void decode_opc(DisasContext * ctx)
 }
 
 static inline void
-gen_intermediate_code_internal(CPUSH4State * env, TranslationBlock * tb,
-                               int search_pc)
+gen_intermediate_code_internal(SuperHCPU *cpu, TranslationBlock *tb,
+                               bool search_pc)
 {
+    CPUState *cs = CPU(cpu);
+    CPUSH4State *env = &cpu->env;
     DisasContext ctx;
     target_ulong pc_start;
     static uint16_t *gen_opc_end;
@@ -1976,7 +1869,7 @@ gen_intermediate_code_internal(CPUSH4State * env, TranslationBlock * tb,
        so assume it is a dynamic branch.  */
     ctx.delayed_pc = -1; /* use delayed pc from env pointer */
     ctx.tb = tb;
-    ctx.singlestep_enabled = env->singlestep_enabled;
+    ctx.singlestep_enabled = cs->singlestep_enabled;
     ctx.features = env->features;
     ctx.has_movcal = (ctx.flags & TB_FLAG_PENDING_MOVCA);
 
@@ -1985,7 +1878,7 @@ gen_intermediate_code_internal(CPUSH4State * env, TranslationBlock * tb,
     max_insns = tb->cflags & CF_COUNT_MASK;
     if (max_insns == 0)
         max_insns = CF_COUNT_MASK;
-    gen_icount_start();
+    gen_tb_start();
     while (ctx.bstate == BS_NONE && tcg_ctx.gen_opc_ptr < gen_opc_end) {
         if (unlikely(!QTAILQ_EMPTY(&env->breakpoints))) {
             QTAILQ_FOREACH(bp, &env->breakpoints, entry) {
@@ -2003,12 +1896,12 @@ gen_intermediate_code_internal(CPUSH4State * env, TranslationBlock * tb,
             if (ii < i) {
                 ii++;
                 while (ii < i)
-                    gen_opc_instr_start[ii++] = 0;
+                    tcg_ctx.gen_opc_instr_start[ii++] = 0;
             }
-            gen_opc_pc[ii] = ctx.pc;
+            tcg_ctx.gen_opc_pc[ii] = ctx.pc;
             gen_opc_hflags[ii] = ctx.flags;
-            gen_opc_instr_start[ii] = 1;
-            gen_opc_icount[ii] = num_insns;
+            tcg_ctx.gen_opc_instr_start[ii] = 1;
+            tcg_ctx.gen_opc_icount[ii] = num_insns;
         }
         if (num_insns + 1 == max_insns && (tb->cflags & CF_LAST_IO))
             gen_io_start();
@@ -2022,8 +1915,9 @@ gen_intermediate_code_internal(CPUSH4State * env, TranslationBlock * tb,
 	ctx.pc += 2;
 	if ((ctx.pc & (TARGET_PAGE_SIZE - 1)) == 0)
 	    break;
-	if (env->singlestep_enabled)
+        if (cs->singlestep_enabled) {
 	    break;
+        }
         if (num_insns >= max_insns)
             break;
         if (singlestep)
@@ -2031,7 +1925,7 @@ gen_intermediate_code_internal(CPUSH4State * env, TranslationBlock * tb,
     }
     if (tb->cflags & CF_LAST_IO)
         gen_io_end();
-    if (env->singlestep_enabled) {
+    if (cs->singlestep_enabled) {
         tcg_gen_movi_i32(cpu_pc, ctx.pc);
         gen_helper_debug(cpu_env);
     } else {
@@ -2055,13 +1949,13 @@ gen_intermediate_code_internal(CPUSH4State * env, TranslationBlock * tb,
 	}
     }
 
-    gen_icount_end(tb, num_insns);
+    gen_tb_end(tb, num_insns);
     *tcg_ctx.gen_opc_ptr = INDEX_op_end;
     if (search_pc) {
         i = tcg_ctx.gen_opc_ptr - tcg_ctx.gen_opc_buf;
         ii++;
         while (ii <= i)
-            gen_opc_instr_start[ii++] = 0;
+            tcg_ctx.gen_opc_instr_start[ii++] = 0;
     } else {
         tb->size = ctx.pc - pc_start;
         tb->icount = num_insns;
@@ -2078,16 +1972,16 @@ gen_intermediate_code_internal(CPUSH4State * env, TranslationBlock * tb,
 
 void gen_intermediate_code(CPUSH4State * env, struct TranslationBlock *tb)
 {
-    gen_intermediate_code_internal(env, tb, 0);
+    gen_intermediate_code_internal(sh_env_get_cpu(env), tb, false);
 }
 
 void gen_intermediate_code_pc(CPUSH4State * env, struct TranslationBlock *tb)
 {
-    gen_intermediate_code_internal(env, tb, 1);
+    gen_intermediate_code_internal(sh_env_get_cpu(env), tb, true);
 }
 
 void restore_state_to_opc(CPUSH4State *env, TranslationBlock *tb, int pc_pos)
 {
-    env->pc = gen_opc_pc[pc_pos];
+    env->pc = tcg_ctx.gen_opc_pc[pc_pos];
     env->flags = gen_opc_hflags[pc_pos];
 }

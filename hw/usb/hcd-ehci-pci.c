@@ -16,13 +16,7 @@
  */
 
 #include "hw/usb/hcd-ehci.h"
-#include "hw/pci.h"
-#include "range.h"
-
-typedef struct EHCIPCIState {
-    PCIDevice pcidev;
-    EHCIState ehci;
-} EHCIPCIState;
+#include "qemu/range.h"
 
 typedef struct EHCIPCIInfo {
     const char *name;
@@ -33,7 +27,7 @@ typedef struct EHCIPCIInfo {
 
 static int usb_ehci_pci_initfn(PCIDevice *dev)
 {
-    EHCIPCIState *i = DO_UPCAST(EHCIPCIState, pcidev, dev);
+    EHCIPCIState *i = PCI_EHCI(dev);
     EHCIState *s = &i->ehci;
     uint8_t *pci_conf = dev->config;
 
@@ -66,24 +60,34 @@ static int usb_ehci_pci_initfn(PCIDevice *dev)
     pci_conf[0x6e] = 0x00;
     pci_conf[0x6f] = 0xc0;  /* USBLEFCTLSTS */
 
-    s->caps[0x09] = 0x68;        /* EECP */
-
     s->irq = dev->irq[3];
-    s->dma = pci_dma_context(dev);
+    s->as = pci_get_address_space(dev);
 
-    s->capsbase = 0x00;
-    s->opregbase = 0x20;
-
-    usb_ehci_initfn(s, DEVICE(dev));
+    usb_ehci_realize(s, DEVICE(dev), NULL);
     pci_register_bar(dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &s->mem);
 
     return 0;
 }
 
+static void usb_ehci_pci_init(Object *obj)
+{
+    EHCIPCIState *i = PCI_EHCI(obj);
+    EHCIState *s = &i->ehci;
+
+    s->caps[0x09] = 0x68;        /* EECP */
+
+    s->capsbase = 0x00;
+    s->opregbase = 0x20;
+    s->portscbase = 0x44;
+    s->portnr = NB_PORTS;
+
+    usb_ehci_init(s, DEVICE(obj));
+}
+
 static void usb_ehci_pci_write_config(PCIDevice *dev, uint32_t addr,
                                       uint32_t val, int l)
 {
-    EHCIPCIState *i = DO_UPCAST(EHCIPCIState, pcidev, dev);
+    EHCIPCIState *i = PCI_EHCI(dev);
     bool busmaster;
 
     pci_default_write_config(dev, addr, val, l);
@@ -92,7 +96,7 @@ static void usb_ehci_pci_write_config(PCIDevice *dev, uint32_t addr,
         return;
     }
     busmaster = pci_get_word(dev->config + PCI_COMMAND) & PCI_COMMAND_MASTER;
-    i->ehci.dma = busmaster ? pci_dma_context(dev) : NULL;
+    i->ehci.as = busmaster ? pci_get_address_space(dev) : &address_space_memory;
 }
 
 static Property ehci_pci_properties[] = {
@@ -115,17 +119,34 @@ static void ehci_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
-    EHCIPCIInfo *i = data;
 
     k->init = usb_ehci_pci_initfn;
-    k->vendor_id = i->vendor_id;
-    k->device_id = i->device_id;
-    k->revision = i->revision;
     k->class_id = PCI_CLASS_SERIAL_USB;
     k->config_write = usb_ehci_pci_write_config;
     k->no_hotplug = 1;
     dc->vmsd = &vmstate_ehci_pci;
     dc->props = ehci_pci_properties;
+}
+
+static const TypeInfo ehci_pci_type_info = {
+    .name = TYPE_PCI_EHCI,
+    .parent = TYPE_PCI_DEVICE,
+    .instance_size = sizeof(EHCIPCIState),
+    .instance_init = usb_ehci_pci_init,
+    .abstract = true,
+    .class_init = ehci_class_init,
+};
+
+static void ehci_data_class_init(ObjectClass *klass, void *data)
+{
+    PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    EHCIPCIInfo *i = data;
+
+    k->vendor_id = i->vendor_id;
+    k->device_id = i->device_id;
+    k->revision = i->revision;
+    set_bit(DEVICE_CATEGORY_USB, dc->categories);
 }
 
 static struct EHCIPCIInfo ehci_pci_info[] = {
@@ -150,11 +171,12 @@ static struct EHCIPCIInfo ehci_pci_info[] = {
 static void ehci_pci_register_types(void)
 {
     TypeInfo ehci_type_info = {
-        .parent        = TYPE_PCI_DEVICE,
-        .instance_size = sizeof(EHCIPCIState),
-        .class_init    = ehci_class_init,
+        .parent        = TYPE_PCI_EHCI,
+        .class_init    = ehci_data_class_init,
     };
     int i;
+
+    type_register_static(&ehci_pci_type_info);
 
     for (i = 0; i < ARRAY_SIZE(ehci_pci_info); i++) {
         ehci_type_info.name = ehci_pci_info[i].name;

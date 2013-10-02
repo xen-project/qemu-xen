@@ -8,15 +8,15 @@
  */
 
 #include "qemu-common.h"
-#include "qemu-option.h"
-#include "qemu-config.h"
+#include "qemu/option.h"
+#include "qemu/config-file.h"
 #include "hw/usb.h"
 #include "hw/usb/desc.h"
-#include "hw/scsi.h"
-#include "console.h"
-#include "monitor.h"
-#include "sysemu.h"
-#include "blockdev.h"
+#include "hw/scsi/scsi.h"
+#include "ui/console.h"
+#include "monitor/monitor.h"
+#include "sysemu/sysemu.h"
+#include "sysemu/blockdev.h"
 
 //#define DEBUG_MSD
 
@@ -54,12 +54,11 @@ typedef struct {
     struct usb_msd_csw csw;
     SCSIRequest *req;
     SCSIBus bus;
-    BlockConf conf;
-    char *serial;
-    SCSIDevice *scsi_dev;
-    uint32_t removable;
     /* For async completion.  */
     USBPacket *packet;
+    /* usb-storage only */
+    BlockConf conf;
+    uint32_t removable;
 } MSDState;
 
 struct usb_msd_cbw {
@@ -343,7 +342,8 @@ static void usb_msd_handle_control(USBDevice *dev, USBPacket *p,
                int request, int value, int index, int length, uint8_t *data)
 {
     MSDState *s = (MSDState *)dev;
-    int ret;
+    SCSIDevice *scsi_dev;
+    int ret, maxlun;
 
     ret = usb_desc_handle_control(dev, p, request, value, index, length, data);
     if (ret >= 0) {
@@ -359,7 +359,19 @@ static void usb_msd_handle_control(USBDevice *dev, USBPacket *p,
         s->mode = USB_MSDM_CBW;
         break;
     case ClassInterfaceRequest | GetMaxLun:
-        data[0] = 0;
+        maxlun = 0;
+        for (;;) {
+            scsi_dev = scsi_device_find(&s->bus, 0, 0, maxlun+1);
+            if (scsi_dev == NULL) {
+                break;
+            }
+            if (scsi_dev->lun != maxlun+1) {
+                break;
+            }
+            maxlun++;
+        }
+        DPRINTF("MaxLun %d\n", maxlun);
+        data[0] = maxlun;
         p->actual_length = 1;
         break;
     default:
@@ -386,6 +398,8 @@ static void usb_msd_handle_data(USBDevice *dev, USBPacket *p)
     uint32_t tag;
     struct usb_msd_cbw cbw;
     uint8_t devep = p->ep->nr;
+    SCSIDevice *scsi_dev;
+    uint32_t len;
 
     switch (p->pid) {
     case USB_TOKEN_OUT:
@@ -405,7 +419,8 @@ static void usb_msd_handle_data(USBDevice *dev, USBPacket *p)
                 goto fail;
             }
             DPRINTF("Command on LUN %d\n", cbw.lun);
-            if (cbw.lun != 0) {
+            scsi_dev = scsi_device_find(&s->bus, 0, 0, cbw.lun);
+            if (scsi_dev == NULL) {
                 fprintf(stderr, "usb-msd: Bad LUN %d\n", cbw.lun);
                 goto fail;
             }
@@ -422,12 +437,12 @@ static void usb_msd_handle_data(USBDevice *dev, USBPacket *p)
                     tag, cbw.flags, cbw.cmd_len, s->data_len);
             assert(le32_to_cpu(s->csw.residue) == 0);
             s->scsi_len = 0;
-            s->req = scsi_req_new(s->scsi_dev, tag, 0, cbw.cmd, NULL);
+            s->req = scsi_req_new(scsi_dev, tag, cbw.lun, cbw.cmd, NULL);
 #ifdef DEBUG_MSD
             scsi_req_print(s->req);
 #endif
-            scsi_req_enqueue(s->req);
-            if (s->req && s->req->cmd.xfer != SCSI_XFER_NONE) {
+            len = scsi_req_enqueue(s->req);
+            if (len) {
                 scsi_req_continue(s->req);
             }
             break;
@@ -553,7 +568,7 @@ static void *usb_msd_load_request(QEMUFile *f, SCSIRequest *req)
     return NULL;
 }
 
-static const struct SCSIBusInfo usb_msd_scsi_info = {
+static const struct SCSIBusInfo usb_msd_scsi_info_storage = {
     .tcq = false,
     .max_target = 0,
     .max_lun = 0,
@@ -564,17 +579,30 @@ static const struct SCSIBusInfo usb_msd_scsi_info = {
     .load_request = usb_msd_load_request,
 };
 
-static int usb_msd_initfn(USBDevice *dev)
+static const struct SCSIBusInfo usb_msd_scsi_info_bot = {
+    .tcq = false,
+    .max_target = 0,
+    .max_lun = 15,
+
+    .transfer_data = usb_msd_transfer_data,
+    .complete = usb_msd_command_complete,
+    .cancel = usb_msd_request_cancelled,
+    .load_request = usb_msd_load_request,
+};
+
+static int usb_msd_initfn_storage(USBDevice *dev)
 {
     MSDState *s = DO_UPCAST(MSDState, dev, dev);
     BlockDriverState *bs = s->conf.bs;
+    SCSIDevice *scsi_dev;
+    Error *err = NULL;
 
     if (!bs) {
         error_report("drive property not set");
         return -1;
     }
 
-    blkconf_serial(&s->conf, &s->serial);
+    blkconf_serial(&s->conf, &dev->serial);
 
     /*
      * Hack alert: this pretends to be a block device, but it's really
@@ -588,17 +616,13 @@ static int usb_msd_initfn(USBDevice *dev)
     bdrv_detach_dev(bs, &s->dev.qdev);
     s->conf.bs = NULL;
 
-    if (s->serial) {
-        usb_desc_set_string(dev, STR_SERIALNUMBER, s->serial);
-    } else {
-        usb_desc_create_serial(dev);
-    }
-
+    usb_desc_create_serial(dev);
     usb_desc_init(dev);
-    scsi_bus_new(&s->bus, &s->dev.qdev, &usb_msd_scsi_info);
-    s->scsi_dev = scsi_bus_legacy_add_drive(&s->bus, bs, 0, !!s->removable,
-                                            s->conf.bootindex);
-    if (!s->scsi_dev) {
+    scsi_bus_new(&s->bus, &s->dev.qdev, &usb_msd_scsi_info_storage, NULL);
+    scsi_dev = scsi_bus_legacy_add_drive(&s->bus, bs, 0, !!s->removable,
+                                         s->conf.bootindex, dev->serial,
+                                         &err);
+    if (!scsi_dev) {
         return -1;
     }
     s->bus.qbus.allow_hotplug = 0;
@@ -612,6 +636,19 @@ static int usb_msd_initfn(USBDevice *dev)
             autostart = 0;
         }
     }
+
+    return 0;
+}
+
+static int usb_msd_initfn_bot(USBDevice *dev)
+{
+    MSDState *s = DO_UPCAST(MSDState, dev, dev);
+
+    usb_desc_create_serial(dev);
+    usb_desc_init(dev);
+    scsi_bus_new(&s->bus, &s->dev.qdev, &usb_msd_scsi_info_bot, NULL);
+    s->bus.qbus.allow_hotplug = 0;
+    usb_msd_handle_reset(dev);
 
     return 0;
 }
@@ -693,17 +730,15 @@ static const VMStateDescription vmstate_usb_msd = {
 
 static Property msd_properties[] = {
     DEFINE_BLOCK_PROPERTIES(MSDState, conf),
-    DEFINE_PROP_STRING("serial", MSDState, serial),
     DEFINE_PROP_BIT("removable", MSDState, removable, 0, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 
-static void usb_msd_class_initfn(ObjectClass *klass, void *data)
+static void usb_msd_class_initfn_common(ObjectClass *klass)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     USBDeviceClass *uc = USB_DEVICE_CLASS(klass);
 
-    uc->init           = usb_msd_initfn;
     uc->product_desc   = "QEMU USB MSD";
     uc->usb_desc       = &desc;
     uc->cancel_packet  = usb_msd_cancel_io;
@@ -711,21 +746,47 @@ static void usb_msd_class_initfn(ObjectClass *klass, void *data)
     uc->handle_reset   = usb_msd_handle_reset;
     uc->handle_control = usb_msd_handle_control;
     uc->handle_data    = usb_msd_handle_data;
+    set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
     dc->fw_name = "storage";
     dc->vmsd = &vmstate_usb_msd;
-    dc->props = msd_properties;
 }
 
-static TypeInfo msd_info = {
+static void usb_msd_class_initfn_storage(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    USBDeviceClass *uc = USB_DEVICE_CLASS(klass);
+
+    uc->init = usb_msd_initfn_storage;
+    dc->props = msd_properties;
+    usb_msd_class_initfn_common(klass);
+}
+
+static void usb_msd_class_initfn_bot(ObjectClass *klass, void *data)
+{
+    USBDeviceClass *uc = USB_DEVICE_CLASS(klass);
+
+    uc->init = usb_msd_initfn_bot;
+    usb_msd_class_initfn_common(klass);
+}
+
+static const TypeInfo msd_info = {
     .name          = "usb-storage",
     .parent        = TYPE_USB_DEVICE,
     .instance_size = sizeof(MSDState),
-    .class_init    = usb_msd_class_initfn,
+    .class_init    = usb_msd_class_initfn_storage,
+};
+
+static const TypeInfo bot_info = {
+    .name          = "usb-bot",
+    .parent        = TYPE_USB_DEVICE,
+    .instance_size = sizeof(MSDState),
+    .class_init    = usb_msd_class_initfn_bot,
 };
 
 static void usb_msd_register_types(void)
 {
     type_register_static(&msd_info);
+    type_register_static(&bot_info);
     usb_legacy_register("usb-storage", "disk", usb_msd_init);
 }
 

@@ -22,8 +22,8 @@
  * THE SOFTWARE.
  */
 #include "qemu-common.h"
-#include "block_int.h"
-#include "module.h"
+#include "block/block_int.h"
+#include "qemu/module.h"
 
 /**************************************************************/
 /* COW block driver using file system holes */
@@ -58,7 +58,7 @@ static int cow_probe(const uint8_t *buf, int buf_size, const char *filename)
         return 0;
 }
 
-static int cow_open(BlockDriverState *bs, int flags)
+static int cow_open(BlockDriverState *bs, QDict *options, int flags)
 {
     BDRVCowState *s = bs->opaque;
     struct cow_header_v2 cow_header;
@@ -73,7 +73,7 @@ static int cow_open(BlockDriverState *bs, int flags)
     }
 
     if (be32_to_cpu(cow_header.magic) != COW_MAGIC) {
-        ret = -EINVAL;
+        ret = -EMEDIUMTYPE;
         goto fail;
     }
 
@@ -279,7 +279,7 @@ static int cow_create(const char *filename, QEMUOptionParameter *options)
         return ret;
     }
 
-    ret = bdrv_file_open(&cow_bs, filename, BDRV_O_RDWR);
+    ret = bdrv_file_open(&cow_bs, filename, NULL, BDRV_O_RDWR);
     if (ret < 0) {
         return ret;
     }
@@ -340,6 +340,7 @@ static BlockDriver bdrv_cow = {
     .bdrv_open      = cow_open,
     .bdrv_close     = cow_close,
     .bdrv_create    = cow_create,
+    .bdrv_has_zero_init     = bdrv_has_zero_init_1,
 
     .bdrv_read              = cow_co_read,
     .bdrv_write             = cow_co_write,

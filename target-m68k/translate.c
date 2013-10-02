@@ -19,9 +19,9 @@
  */
 
 #include "cpu.h"
-#include "disas.h"
+#include "disas/disas.h"
 #include "tcg-op.h"
-#include "qemu-log.h"
+#include "qemu/log.h"
 
 #include "helpers.h"
 #define GEN_HELPER 1
@@ -42,6 +42,8 @@
 #undef DEFO64
 #undef DEFF64
 
+static TCGv_i32 cpu_halted;
+
 static TCGv_ptr cpu_env;
 
 static char cpu_reg_names[3*8*3 + 5*4];
@@ -61,7 +63,7 @@ static TCGv NULL_QREG;
 /* Used to distinguish stores from bad addressing modes.  */
 static TCGv store_dummy;
 
-#include "gen-icount.h"
+#include "exec/gen-icount.h"
 
 void m68k_tcg_init(void)
 {
@@ -75,6 +77,10 @@ void m68k_tcg_init(void)
 #undef DEFO32
 #undef DEFO64
 #undef DEFF64
+
+    cpu_halted = tcg_global_mem_new_i32(TCG_AREG0,
+                                        -offsetof(M68kCPU, env) +
+                                        offsetof(CPUState, halted), "HALTED");
 
     cpu_env = tcg_global_reg_new_ptr(TCG_AREG0, "env");
 
@@ -574,7 +580,7 @@ static inline TCGv gen_ea_once(CPUM68KState *env, DisasContext *s,
     return gen_ldst(s, opsize, tmp, val, what);
 }
 
-/* Generate code to load/store a value ito/from an EA.  If VAL > 0 this is
+/* Generate code to load/store a value from/into an EA.  If VAL > 0 this is
    a write otherwise it is a read (0 == sign extend, -1 == zero extend).
    ADDRP is non-null for readwrite operands.  */
 static TCGv gen_ea(CPUM68KState *env, DisasContext *s, uint16_t insn,
@@ -2024,7 +2030,7 @@ DISAS_INSN(stop)
     s->pc += 2;
 
     gen_set_sr_im(s, ext, 0);
-    tcg_gen_movi_i32(QREG_HALTED, 1);
+    tcg_gen_movi_i32(cpu_halted, 1);
     gen_exception(s, s->pc, EXCP_HLT);
 }
 
@@ -2965,9 +2971,11 @@ static void disas_m68k_insn(CPUM68KState * env, DisasContext *s)
 
 /* generate intermediate code for basic block 'tb'.  */
 static inline void
-gen_intermediate_code_internal(CPUM68KState *env, TranslationBlock *tb,
-                               int search_pc)
+gen_intermediate_code_internal(M68kCPU *cpu, TranslationBlock *tb,
+                               bool search_pc)
 {
+    CPUState *cs = CPU(cpu);
+    CPUM68KState *env = &cpu->env;
     DisasContext dc1, *dc = &dc1;
     uint16_t *gen_opc_end;
     CPUBreakpoint *bp;
@@ -2988,7 +2996,7 @@ gen_intermediate_code_internal(CPUM68KState *env, TranslationBlock *tb,
     dc->is_jmp = DISAS_NEXT;
     dc->pc = pc_start;
     dc->cc_op = CC_OP_DYNAMIC;
-    dc->singlestep_enabled = env->singlestep_enabled;
+    dc->singlestep_enabled = cs->singlestep_enabled;
     dc->fpcr = env->fpcr;
     dc->user = (env->sr & SR_S) == 0;
     dc->is_mem = 0;
@@ -2999,7 +3007,7 @@ gen_intermediate_code_internal(CPUM68KState *env, TranslationBlock *tb,
     if (max_insns == 0)
         max_insns = CF_COUNT_MASK;
 
-    gen_icount_start();
+    gen_tb_start();
     do {
         pc_offset = dc->pc - pc_start;
         gen_throws_exception = NULL;
@@ -3019,11 +3027,11 @@ gen_intermediate_code_internal(CPUM68KState *env, TranslationBlock *tb,
             if (lj < j) {
                 lj++;
                 while (lj < j)
-                    gen_opc_instr_start[lj++] = 0;
+                    tcg_ctx.gen_opc_instr_start[lj++] = 0;
             }
-            gen_opc_pc[lj] = dc->pc;
-            gen_opc_instr_start[lj] = 1;
-            gen_opc_icount[lj] = num_insns;
+            tcg_ctx.gen_opc_pc[lj] = dc->pc;
+            tcg_ctx.gen_opc_instr_start[lj] = 1;
+            tcg_ctx.gen_opc_icount[lj] = num_insns;
         }
         if (num_insns + 1 == max_insns && (tb->cflags & CF_LAST_IO))
             gen_io_start();
@@ -3031,14 +3039,14 @@ gen_intermediate_code_internal(CPUM68KState *env, TranslationBlock *tb,
 	disas_m68k_insn(env, dc);
         num_insns++;
     } while (!dc->is_jmp && tcg_ctx.gen_opc_ptr < gen_opc_end &&
-             !env->singlestep_enabled &&
+             !cs->singlestep_enabled &&
              !singlestep &&
              (pc_offset) < (TARGET_PAGE_SIZE - 32) &&
              num_insns < max_insns);
 
     if (tb->cflags & CF_LAST_IO)
         gen_io_end();
-    if (unlikely(env->singlestep_enabled)) {
+    if (unlikely(cs->singlestep_enabled)) {
         /* Make sure the pc is updated, and raise a debug exception.  */
         if (!dc->is_jmp) {
             gen_flush_cc_op(dc);
@@ -3063,7 +3071,7 @@ gen_intermediate_code_internal(CPUM68KState *env, TranslationBlock *tb,
             break;
         }
     }
-    gen_icount_end(tb, num_insns);
+    gen_tb_end(tb, num_insns);
     *tcg_ctx.gen_opc_ptr = INDEX_op_end;
 
 #ifdef DEBUG_DISAS
@@ -3078,7 +3086,7 @@ gen_intermediate_code_internal(CPUM68KState *env, TranslationBlock *tb,
         j = tcg_ctx.gen_opc_ptr - tcg_ctx.gen_opc_buf;
         lj++;
         while (lj <= j)
-            gen_opc_instr_start[lj++] = 0;
+            tcg_ctx.gen_opc_instr_start[lj++] = 0;
     } else {
         tb->size = dc->pc - pc_start;
         tb->icount = num_insns;
@@ -3090,17 +3098,19 @@ gen_intermediate_code_internal(CPUM68KState *env, TranslationBlock *tb,
 
 void gen_intermediate_code(CPUM68KState *env, TranslationBlock *tb)
 {
-    gen_intermediate_code_internal(env, tb, 0);
+    gen_intermediate_code_internal(m68k_env_get_cpu(env), tb, false);
 }
 
 void gen_intermediate_code_pc(CPUM68KState *env, TranslationBlock *tb)
 {
-    gen_intermediate_code_internal(env, tb, 1);
+    gen_intermediate_code_internal(m68k_env_get_cpu(env), tb, true);
 }
 
-void cpu_dump_state(CPUM68KState *env, FILE *f, fprintf_function cpu_fprintf,
-                    int flags)
+void m68k_cpu_dump_state(CPUState *cs, FILE *f, fprintf_function cpu_fprintf,
+                         int flags)
 {
+    M68kCPU *cpu = M68K_CPU(cs);
+    CPUM68KState *env = &cpu->env;
     int i;
     uint16_t sr;
     CPU_DoubleU u;
@@ -3121,5 +3131,5 @@ void cpu_dump_state(CPUM68KState *env, FILE *f, fprintf_function cpu_fprintf,
 
 void restore_state_to_opc(CPUM68KState *env, TranslationBlock *tb, int pc_pos)
 {
-    env->pc = gen_opc_pc[pc_pos];
+    env->pc = tcg_ctx.gen_opc_pc[pc_pos];
 }

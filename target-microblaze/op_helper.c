@@ -21,22 +21,22 @@
 #include <assert.h>
 #include "cpu.h"
 #include "helper.h"
-#include "host-utils.h"
+#include "qemu/host-utils.h"
 
 #define D(x)
 
 #if !defined(CONFIG_USER_ONLY)
-#include "softmmu_exec.h"
+#include "exec/softmmu_exec.h"
 
 #define MMUSUFFIX _mmu
 #define SHIFT 0
-#include "softmmu_template.h"
+#include "exec/softmmu_template.h"
 #define SHIFT 1
-#include "softmmu_template.h"
+#include "exec/softmmu_template.h"
 #define SHIFT 2
-#include "softmmu_template.h"
+#include "exec/softmmu_template.h"
 #define SHIFT 3
-#include "softmmu_template.h"
+#include "exec/softmmu_template.h"
 
 /* Try to fill the TLB and return an exception if error. If retaddr is
    NULL, it means that the function was called in C code (i.e. not
@@ -44,19 +44,13 @@
 void tlb_fill(CPUMBState *env, target_ulong addr, int is_write, int mmu_idx,
               uintptr_t retaddr)
 {
-    TranslationBlock *tb;
     int ret;
 
     ret = cpu_mb_handle_mmu_fault(env, addr, is_write, mmu_idx);
     if (unlikely(ret)) {
         if (retaddr) {
             /* now we have a real cpu fault */
-            tb = tb_find_pc(retaddr);
-            if (tb) {
-                /* the PC is inside the translated code. It means that we have
-                   a virtual CPU fault */
-                cpu_restore_state(tb, env, retaddr);
-            }
+            cpu_restore_state(env, retaddr);
         }
         cpu_loop_exit(env);
     }
@@ -501,11 +495,20 @@ void helper_mmu_write(CPUMBState *env, uint32_t rn, uint32_t v)
     mmu_write(env, rn, v);
 }
 
-void cpu_unassigned_access(CPUMBState *env, hwaddr addr,
-                           int is_write, int is_exec, int is_asi, int size)
+void mb_cpu_unassigned_access(CPUState *cs, hwaddr addr,
+                              bool is_write, bool is_exec, int is_asi,
+                              unsigned size)
 {
+    MicroBlazeCPU *cpu;
+    CPUMBState *env;
+
     qemu_log_mask(CPU_LOG_INT, "Unassigned " TARGET_FMT_plx " wr=%d exe=%d\n",
-             addr, is_write, is_exec);
+             addr, is_write ? 1 : 0, is_exec ? 1 : 0);
+    if (cs == NULL) {
+        return;
+    }
+    cpu = MICROBLAZE_CPU(cs);
+    env = &cpu->env;
     if (!(env->sregs[SR_MSR] & MSR_EE)) {
         return;
     }

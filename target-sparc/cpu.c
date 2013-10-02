@@ -30,11 +30,6 @@ static void sparc_cpu_reset(CPUState *s)
     SPARCCPUClass *scc = SPARC_CPU_GET_CLASS(cpu);
     CPUSPARCState *env = &cpu->env;
 
-    if (qemu_loglevel_mask(CPU_LOG_RESET)) {
-        qemu_log("CPU Reset (CPU %d)\n", env->cpu_index);
-        log_cpu_state(env, 0);
-    }
-
     scc->parent_reset(s);
 
     memset(env, 0, offsetof(CPUSPARCState, breakpoints));
@@ -114,15 +109,12 @@ SPARCCPU *cpu_sparc_init(const char *cpu_model)
     cpu = SPARC_CPU(object_new(TYPE_SPARC_CPU));
     env = &cpu->env;
 
-    if (tcg_enabled()) {
-        gen_intermediate_code_init(env);
-    }
-
     if (cpu_sparc_register(env, cpu_model) < 0) {
-        object_delete(OBJECT(cpu));
+        object_unref(OBJECT(cpu));
         return NULL;
     }
-    qemu_init_vcpu(env);
+
+    object_property_set_bool(OBJECT(cpu), true, "realized", NULL);
 
     return cpu;
 }
@@ -295,19 +287,6 @@ static const sparc_def_t sparc_defs[] = {
     },
 #else
     {
-        .name = "Fujitsu MB86900",
-        .iu_version = 0x00 << 24, /* Impl 0, ver 0 */
-        .fpu_version = 4 << 17, /* FPU version 4 (Meiko) */
-        .mmu_version = 0x00 << 24, /* Impl 0, ver 0 */
-        .mmu_bm = 0x00004000,
-        .mmu_ctpr_mask = 0x007ffff0,
-        .mmu_cxr_mask = 0x0000003f,
-        .mmu_sfsr_mask = 0xffffffff,
-        .mmu_trcr_mask = 0xffffffff,
-        .nwindows = 7,
-        .features = CPU_FEATURE_FLOAT | CPU_FEATURE_FSMULD,
-    },
-    {
         .name = "Fujitsu MB86904",
         .iu_version = 0x04 << 24, /* Impl 0, ver 4 */
         .fpu_version = 4 << 17, /* FPU version 4 (Meiko) */
@@ -332,48 +311,6 @@ static const sparc_def_t sparc_defs[] = {
         .mmu_trcr_mask = 0xffffffff,
         .nwindows = 8,
         .features = CPU_DEFAULT_FEATURES,
-    },
-    {
-        .name = "LSI L64811",
-        .iu_version = 0x10 << 24, /* Impl 1, ver 0 */
-        .fpu_version = 1 << 17, /* FPU version 1 (LSI L64814) */
-        .mmu_version = 0x10 << 24,
-        .mmu_bm = 0x00004000,
-        .mmu_ctpr_mask = 0x007ffff0,
-        .mmu_cxr_mask = 0x0000003f,
-        .mmu_sfsr_mask = 0xffffffff,
-        .mmu_trcr_mask = 0xffffffff,
-        .nwindows = 8,
-        .features = CPU_FEATURE_FLOAT | CPU_FEATURE_SWAP | CPU_FEATURE_FSQRT |
-        CPU_FEATURE_FSMULD,
-    },
-    {
-        .name = "Cypress CY7C601",
-        .iu_version = 0x11 << 24, /* Impl 1, ver 1 */
-        .fpu_version = 3 << 17, /* FPU version 3 (Cypress CY7C602) */
-        .mmu_version = 0x10 << 24,
-        .mmu_bm = 0x00004000,
-        .mmu_ctpr_mask = 0x007ffff0,
-        .mmu_cxr_mask = 0x0000003f,
-        .mmu_sfsr_mask = 0xffffffff,
-        .mmu_trcr_mask = 0xffffffff,
-        .nwindows = 8,
-        .features = CPU_FEATURE_FLOAT | CPU_FEATURE_SWAP | CPU_FEATURE_FSQRT |
-        CPU_FEATURE_FSMULD,
-    },
-    {
-        .name = "Cypress CY7C611",
-        .iu_version = 0x13 << 24, /* Impl 1, ver 3 */
-        .fpu_version = 3 << 17, /* FPU version 3 (Cypress CY7C602) */
-        .mmu_version = 0x10 << 24,
-        .mmu_bm = 0x00004000,
-        .mmu_ctpr_mask = 0x007ffff0,
-        .mmu_cxr_mask = 0x0000003f,
-        .mmu_sfsr_mask = 0xffffffff,
-        .mmu_trcr_mask = 0xffffffff,
-        .nwindows = 8,
-        .features = CPU_FEATURE_FLOAT | CPU_FEATURE_SWAP | CPU_FEATURE_FSQRT |
-        CPU_FEATURE_FSMULD,
     },
     {
         .name = "TI MicroSparc I",
@@ -498,73 +435,6 @@ static const sparc_def_t sparc_defs[] = {
         .features = CPU_DEFAULT_FEATURES,
     },
     {
-        .name = "Ross RT625",
-        .iu_version = 0x1e000000,
-        .fpu_version = 1 << 17,
-        .mmu_version = 0x1e000000,
-        .mmu_bm = 0x00004000,
-        .mmu_ctpr_mask = 0x007ffff0,
-        .mmu_cxr_mask = 0x0000003f,
-        .mmu_sfsr_mask = 0xffffffff,
-        .mmu_trcr_mask = 0xffffffff,
-        .nwindows = 8,
-        .features = CPU_DEFAULT_FEATURES,
-    },
-    {
-        .name = "Ross RT620",
-        .iu_version = 0x1f000000,
-        .fpu_version = 1 << 17,
-        .mmu_version = 0x1f000000,
-        .mmu_bm = 0x00004000,
-        .mmu_ctpr_mask = 0x007ffff0,
-        .mmu_cxr_mask = 0x0000003f,
-        .mmu_sfsr_mask = 0xffffffff,
-        .mmu_trcr_mask = 0xffffffff,
-        .nwindows = 8,
-        .features = CPU_DEFAULT_FEATURES,
-    },
-    {
-        .name = "BIT B5010",
-        .iu_version = 0x20000000,
-        .fpu_version = 0 << 17, /* B5010/B5110/B5120/B5210 */
-        .mmu_version = 0x20000000,
-        .mmu_bm = 0x00004000,
-        .mmu_ctpr_mask = 0x007ffff0,
-        .mmu_cxr_mask = 0x0000003f,
-        .mmu_sfsr_mask = 0xffffffff,
-        .mmu_trcr_mask = 0xffffffff,
-        .nwindows = 8,
-        .features = CPU_FEATURE_FLOAT | CPU_FEATURE_SWAP | CPU_FEATURE_FSQRT |
-        CPU_FEATURE_FSMULD,
-    },
-    {
-        .name = "Matsushita MN10501",
-        .iu_version = 0x50000000,
-        .fpu_version = 0 << 17,
-        .mmu_version = 0x50000000,
-        .mmu_bm = 0x00004000,
-        .mmu_ctpr_mask = 0x007ffff0,
-        .mmu_cxr_mask = 0x0000003f,
-        .mmu_sfsr_mask = 0xffffffff,
-        .mmu_trcr_mask = 0xffffffff,
-        .nwindows = 8,
-        .features = CPU_FEATURE_FLOAT | CPU_FEATURE_MUL | CPU_FEATURE_FSQRT |
-        CPU_FEATURE_FSMULD,
-    },
-    {
-        .name = "Weitek W8601",
-        .iu_version = 0x90 << 24, /* Impl 9, ver 0 */
-        .fpu_version = 3 << 17, /* FPU version 3 (Weitek WTL3170/2) */
-        .mmu_version = 0x10 << 24,
-        .mmu_bm = 0x00004000,
-        .mmu_ctpr_mask = 0x007ffff0,
-        .mmu_cxr_mask = 0x0000003f,
-        .mmu_sfsr_mask = 0xffffffff,
-        .mmu_trcr_mask = 0xffffffff,
-        .nwindows = 8,
-        .features = CPU_DEFAULT_FEATURES,
-    },
-    {
         .name = "LEON2",
         .iu_version = 0xf2000000,
         .fpu_version = 4 << 17, /* FPU version 4 (Meiko) */
@@ -583,13 +453,13 @@ static const sparc_def_t sparc_defs[] = {
         .fpu_version = 4 << 17, /* FPU version 4 (Meiko) */
         .mmu_version = 0xf3000000,
         .mmu_bm = 0x00000000,
-        .mmu_ctpr_mask = 0x007ffff0,
-        .mmu_cxr_mask = 0x0000003f,
+        .mmu_ctpr_mask = 0xfffffffc,
+        .mmu_cxr_mask = 0x000000ff,
         .mmu_sfsr_mask = 0xffffffff,
         .mmu_trcr_mask = 0xffffffff,
         .nwindows = 8,
         .features = CPU_DEFAULT_FEATURES | CPU_FEATURE_TA0_SHUTDOWN |
-        CPU_FEATURE_ASR17 | CPU_FEATURE_CACHE_CTRL,
+        CPU_FEATURE_ASR17 | CPU_FEATURE_CACHE_CTRL | CPU_FEATURE_POWERDOWN,
     },
 #endif
 };
@@ -739,7 +609,7 @@ static int cpu_sparc_find_by_name(sparc_def_t *cpu_def, const char *cpu_model)
     return 0;
 
  error:
-    free(s);
+    g_free(s);
     return -1;
 }
 
@@ -785,9 +655,11 @@ static void cpu_print_cc(FILE *f, fprintf_function cpu_fprintf,
 #define REGS_PER_LINE 8
 #endif
 
-void cpu_dump_state(CPUSPARCState *env, FILE *f, fprintf_function cpu_fprintf,
-                    int flags)
+void sparc_cpu_dump_state(CPUState *cs, FILE *f, fprintf_function cpu_fprintf,
+                          int flags)
 {
+    SPARCCPU *cpu = SPARC_CPU(cs);
+    CPUSPARCState *env = &cpu->env;
     int i, x;
 
     cpu_fprintf(f, "pc: " TARGET_FMT_lx "  npc: " TARGET_FMT_lx "\n", env->pc,
@@ -851,12 +723,43 @@ void cpu_dump_state(CPUSPARCState *env, FILE *f, fprintf_function cpu_fprintf,
     cpu_fprintf(f, "\n");
 }
 
+static void sparc_cpu_set_pc(CPUState *cs, vaddr value)
+{
+    SPARCCPU *cpu = SPARC_CPU(cs);
+
+    cpu->env.pc = value;
+    cpu->env.npc = value + 4;
+}
+
+static void sparc_cpu_synchronize_from_tb(CPUState *cs, TranslationBlock *tb)
+{
+    SPARCCPU *cpu = SPARC_CPU(cs);
+
+    cpu->env.pc = tb->pc;
+    cpu->env.npc = tb->cs_base;
+}
+
+static void sparc_cpu_realizefn(DeviceState *dev, Error **errp)
+{
+    SPARCCPUClass *scc = SPARC_CPU_GET_CLASS(dev);
+
+    qemu_init_vcpu(CPU(dev));
+
+    scc->parent_realize(dev, errp);
+}
+
 static void sparc_cpu_initfn(Object *obj)
 {
+    CPUState *cs = CPU(obj);
     SPARCCPU *cpu = SPARC_CPU(obj);
     CPUSPARCState *env = &cpu->env;
 
+    cs->env_ptr = env;
     cpu_exec_init(env);
+
+    if (tcg_enabled()) {
+        gen_intermediate_code_init(env);
+    }
 }
 
 static void sparc_cpu_uninitfn(Object *obj)
@@ -871,9 +774,33 @@ static void sparc_cpu_class_init(ObjectClass *oc, void *data)
 {
     SPARCCPUClass *scc = SPARC_CPU_CLASS(oc);
     CPUClass *cc = CPU_CLASS(oc);
+    DeviceClass *dc = DEVICE_CLASS(oc);
+
+    scc->parent_realize = dc->realize;
+    dc->realize = sparc_cpu_realizefn;
 
     scc->parent_reset = cc->reset;
     cc->reset = sparc_cpu_reset;
+
+    cc->do_interrupt = sparc_cpu_do_interrupt;
+    cc->dump_state = sparc_cpu_dump_state;
+#if !defined(TARGET_SPARC64) && !defined(CONFIG_USER_ONLY)
+    cc->memory_rw_debug = sparc_cpu_memory_rw_debug;
+#endif
+    cc->set_pc = sparc_cpu_set_pc;
+    cc->synchronize_from_tb = sparc_cpu_synchronize_from_tb;
+    cc->gdb_read_register = sparc_cpu_gdb_read_register;
+    cc->gdb_write_register = sparc_cpu_gdb_write_register;
+#ifndef CONFIG_USER_ONLY
+    cc->do_unassigned_access = sparc_cpu_unassigned_access;
+    cc->get_phys_page_debug = sparc_cpu_get_phys_page_debug;
+#endif
+
+#if defined(TARGET_SPARC64) && !defined(TARGET_ABI32)
+    cc->gdb_num_core_regs = 86;
+#else
+    cc->gdb_num_core_regs = 72;
+#endif
 }
 
 static const TypeInfo sparc_cpu_type_info = {

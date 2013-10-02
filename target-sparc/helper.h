@@ -1,9 +1,10 @@
-#include "def-helper.h"
+#include "exec/def-helper.h"
 
 #ifndef TARGET_SPARC64
 DEF_HELPER_1(rett, void, env)
 DEF_HELPER_2(wrpsr, void, env, tl)
 DEF_HELPER_1(rdpsr, tl, env)
+DEF_HELPER_1(power_down, void, env)
 #else
 DEF_HELPER_2(wrpil, void, env, tl)
 DEF_HELPER_2(wrpstate, void, env, tl)
@@ -173,4 +174,4 @@ VIS_CMPHELPER(cmpne);
 DEF_HELPER_1(compute_psr, void, env);
 DEF_HELPER_1(compute_C_icc, i32, env);
 
-#include "def-helper.h"
+#include "exec/def-helper.h"

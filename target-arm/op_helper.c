@@ -52,21 +52,21 @@ uint32_t HELPER(neon_tbl)(CPUARMState *env, uint32_t ireg, uint32_t def,
 
 #if !defined(CONFIG_USER_ONLY)
 
-#include "softmmu_exec.h"
+#include "exec/softmmu_exec.h"
 
 #define MMUSUFFIX _mmu
 
 #define SHIFT 0
-#include "softmmu_template.h"
+#include "exec/softmmu_template.h"
 
 #define SHIFT 1
-#include "softmmu_template.h"
+#include "exec/softmmu_template.h"
 
 #define SHIFT 2
-#include "softmmu_template.h"
+#include "exec/softmmu_template.h"
 
 #define SHIFT 3
-#include "softmmu_template.h"
+#include "exec/softmmu_template.h"
 
 /* try to fill the TLB and return an exception if error. If retaddr is
    NULL, it means that the function was called in C code (i.e. not
@@ -74,19 +74,13 @@ uint32_t HELPER(neon_tbl)(CPUARMState *env, uint32_t ireg, uint32_t def,
 void tlb_fill(CPUARMState *env, target_ulong addr, int is_write, int mmu_idx,
               uintptr_t retaddr)
 {
-    TranslationBlock *tb;
     int ret;
 
     ret = cpu_arm_handle_mmu_fault(env, addr, is_write, mmu_idx);
     if (unlikely(ret)) {
         if (retaddr) {
             /* now we have a real cpu fault */
-            tb = tb_find_pc(retaddr);
-            if (tb) {
-                /* the PC is inside the translated code. It means that we have
-                   a virtual CPU fault */
-                cpu_restore_state(tb, env, retaddr);
-            }
+            cpu_restore_state(env, retaddr);
         }
         raise_exception(env, env->exception_index);
     }
@@ -224,8 +218,10 @@ uint32_t HELPER(usat16)(CPUARMState *env, uint32_t x, uint32_t shift)
 
 void HELPER(wfi)(CPUARMState *env)
 {
+    CPUState *cs = CPU(arm_env_get_cpu(env));
+
     env->exception_index = EXCP_HLT;
-    env->halted = 1;
+    cs->halted = 1;
     cpu_loop_exit(env);
 }
 
@@ -320,36 +316,6 @@ uint64_t HELPER(get_cp_reg64)(CPUARMState *env, void *rip)
 /* ??? Flag setting arithmetic is awkward because we need to do comparisons.
    The only way to do that in TCG is a conditional branch, which clobbers
    all our temporaries.  For now implement these as helper functions.  */
-
-uint32_t HELPER(adc_cc)(CPUARMState *env, uint32_t a, uint32_t b)
-{
-    uint32_t result;
-    if (!env->CF) {
-        result = a + b;
-        env->CF = result < a;
-    } else {
-        result = a + b + 1;
-        env->CF = result <= a;
-    }
-    env->VF = (a ^ b ^ -1) & (a ^ result);
-    env->NF = env->ZF = result;
-    return result;
-}
-
-uint32_t HELPER(sbc_cc)(CPUARMState *env, uint32_t a, uint32_t b)
-{
-    uint32_t result;
-    if (!env->CF) {
-        result = a - b - 1;
-        env->CF = a > b;
-    } else {
-        result = a - b;
-        env->CF = a >= b;
-    }
-    env->VF = (a ^ b) & (a ^ result);
-    env->NF = env->ZF = result;
-    return result;
-}
 
 /* Similarly for variable shift instructions.  */
 

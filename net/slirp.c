@@ -29,12 +29,13 @@
 #include <pwd.h>
 #include <sys/wait.h>
 #endif
-#include "net.h"
+#include "net/net.h"
 #include "clients.h"
 #include "hub.h"
-#include "monitor.h"
-#include "qemu_socket.h"
+#include "monitor/monitor.h"
+#include "qemu/sockets.h"
 #include "slirp/libslirp.h"
+#include "sysemu/char.h"
 
 static int get_str_sep(char *buf, int buf_size, const char **pp, int sep)
 {
@@ -211,19 +212,19 @@ static int net_slirp_init(NetClientState *peer, const char *model,
         return -1;
     }
 
-    if (vdhcp_start && !inet_aton(vdhcp_start, &dhcp)) {
-        return -1;
-    }
-    if ((dhcp.s_addr & mask.s_addr) != net.s_addr ||
-        dhcp.s_addr == host.s_addr || dhcp.s_addr == dns.s_addr) {
-        return -1;
-    }
-
     if (vnameserver && !inet_aton(vnameserver, &dns)) {
         return -1;
     }
     if ((dns.s_addr & mask.s_addr) != net.s_addr ||
         dns.s_addr == host.s_addr) {
+        return -1;
+    }
+
+    if (vdhcp_start && !inet_aton(vdhcp_start, &dhcp)) {
+        return -1;
+    }
+    if ((dhcp.s_addr & mask.s_addr) != net.s_addr ||
+        dhcp.s_addr == host.s_addr || dhcp.s_addr == dns.s_addr) {
         return -1;
     }
 
@@ -659,6 +660,7 @@ static int slirp_guestfwd(SlirpState *s, const char *config_str,
         fwd->port = port;
         fwd->slirp = s->slirp;
 
+        qemu_chr_fe_claim_no_fail(fwd->hd);
         qemu_chr_add_handlers(fwd->hd, guestfwd_can_read, guestfwd_read,
                               NULL, fwd);
     }
@@ -669,7 +671,7 @@ static int slirp_guestfwd(SlirpState *s, const char *config_str,
     return -1;
 }
 
-void do_info_usernet(Monitor *mon)
+void do_info_usernet(Monitor *mon, const QDict *qdict)
 {
     SlirpState *s;
 

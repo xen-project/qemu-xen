@@ -21,7 +21,7 @@
 #include "helper.h"
 
 #if !defined(CONFIG_USER_ONLY)
-#include "softmmu_exec.h"
+#include "exec/softmmu_exec.h"
 #endif /* !defined(CONFIG_USER_ONLY) */
 
 /* broken thread support */
@@ -45,14 +45,14 @@ void helper_cmpxchg8b(CPUX86State *env, target_ulong a0)
 
     eflags = cpu_cc_compute_all(env, CC_OP);
     d = cpu_ldq_data(env, a0);
-    if (d == (((uint64_t)EDX << 32) | (uint32_t)EAX)) {
-        cpu_stq_data(env, a0, ((uint64_t)ECX << 32) | (uint32_t)EBX);
+    if (d == (((uint64_t)env->regs[R_EDX] << 32) | (uint32_t)env->regs[R_EAX])) {
+        cpu_stq_data(env, a0, ((uint64_t)env->regs[R_ECX] << 32) | (uint32_t)env->regs[R_EBX]);
         eflags |= CC_Z;
     } else {
         /* always do the store */
         cpu_stq_data(env, a0, d);
-        EDX = (uint32_t)(d >> 32);
-        EAX = (uint32_t)d;
+        env->regs[R_EDX] = (uint32_t)(d >> 32);
+        env->regs[R_EAX] = (uint32_t)d;
         eflags &= ~CC_Z;
     }
     CC_SRC = eflags;
@@ -70,16 +70,16 @@ void helper_cmpxchg16b(CPUX86State *env, target_ulong a0)
     eflags = cpu_cc_compute_all(env, CC_OP);
     d0 = cpu_ldq_data(env, a0);
     d1 = cpu_ldq_data(env, a0 + 8);
-    if (d0 == EAX && d1 == EDX) {
-        cpu_stq_data(env, a0, EBX);
-        cpu_stq_data(env, a0 + 8, ECX);
+    if (d0 == env->regs[R_EAX] && d1 == env->regs[R_EDX]) {
+        cpu_stq_data(env, a0, env->regs[R_EBX]);
+        cpu_stq_data(env, a0 + 8, env->regs[R_ECX]);
         eflags |= CC_Z;
     } else {
         /* always do the store */
         cpu_stq_data(env, a0, d0);
         cpu_stq_data(env, a0 + 8, d1);
-        EDX = d1;
-        EAX = d0;
+        env->regs[R_EDX] = d1;
+        env->regs[R_EAX] = d0;
         eflags &= ~CC_Z;
     }
     CC_SRC = eflags;
@@ -114,16 +114,16 @@ void helper_boundl(CPUX86State *env, target_ulong a0, int v)
 #define MMUSUFFIX _mmu
 
 #define SHIFT 0
-#include "softmmu_template.h"
+#include "exec/softmmu_template.h"
 
 #define SHIFT 1
-#include "softmmu_template.h"
+#include "exec/softmmu_template.h"
 
 #define SHIFT 2
-#include "softmmu_template.h"
+#include "exec/softmmu_template.h"
 
 #define SHIFT 3
-#include "softmmu_template.h"
+#include "exec/softmmu_template.h"
 
 #endif
 
@@ -135,19 +135,13 @@ void helper_boundl(CPUX86State *env, target_ulong a0, int v)
 void tlb_fill(CPUX86State *env, target_ulong addr, int is_write, int mmu_idx,
               uintptr_t retaddr)
 {
-    TranslationBlock *tb;
     int ret;
 
     ret = cpu_x86_handle_mmu_fault(env, addr, is_write, mmu_idx);
     if (ret) {
         if (retaddr) {
             /* now we have a real cpu fault */
-            tb = tb_find_pc(retaddr);
-            if (tb) {
-                /* the PC is inside the translated code. It means that we have
-                   a virtual CPU fault */
-                cpu_restore_state(tb, env, retaddr);
-            }
+            cpu_restore_state(env, retaddr);
         }
         raise_exception_err(env, env->exception_index, env->error_code);
     }

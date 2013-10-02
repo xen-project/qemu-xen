@@ -18,11 +18,11 @@
  */
 
 #include "cpu.h"
-#include "cpu-all.h"
+#include "exec/cpu-all.h"
 #include "helper.h"
 
 #if !defined(CONFIG_USER_ONLY)
-#include "softmmu_exec.h"
+#include "exec/softmmu_exec.h"
 #endif /* !defined(CONFIG_USER_ONLY) */
 
 /* Secure Virtual Machine helpers */
@@ -129,9 +129,9 @@ void helper_vmrun(CPUX86State *env, int aflag, int next_eip_addend)
     cpu_svm_check_intercept_param(env, SVM_EXIT_VMRUN, 0);
 
     if (aflag == 2) {
-        addr = EAX;
+        addr = env->regs[R_EAX];
     } else {
-        addr = (uint32_t)EAX;
+        addr = (uint32_t)env->regs[R_EAX];
     }
 
     qemu_log_mask(CPU_LOG_TB_IN_ASM, "vmrun! " TARGET_FMT_lx "\n", addr);
@@ -170,9 +170,9 @@ void helper_vmrun(CPUX86State *env, int aflag, int next_eip_addend)
                  &env->segs[R_DS]);
 
     stq_phys(env->vm_hsave + offsetof(struct vmcb, save.rip),
-             EIP + next_eip_addend);
-    stq_phys(env->vm_hsave + offsetof(struct vmcb, save.rsp), ESP);
-    stq_phys(env->vm_hsave + offsetof(struct vmcb, save.rax), EAX);
+             env->eip + next_eip_addend);
+    stq_phys(env->vm_hsave + offsetof(struct vmcb, save.rsp), env->regs[R_ESP]);
+    stq_phys(env->vm_hsave + offsetof(struct vmcb, save.rax), env->regs[R_EAX]);
 
     /* load the interception bitmaps so we do not need to access the
        vmcb in svm mode */
@@ -248,10 +248,10 @@ void helper_vmrun(CPUX86State *env, int aflag, int next_eip_addend)
     svm_load_seg_cache(env, env->vm_vmcb + offsetof(struct vmcb, save.ds),
                        R_DS);
 
-    EIP = ldq_phys(env->vm_vmcb + offsetof(struct vmcb, save.rip));
-    env->eip = EIP;
-    ESP = ldq_phys(env->vm_vmcb + offsetof(struct vmcb, save.rsp));
-    EAX = ldq_phys(env->vm_vmcb + offsetof(struct vmcb, save.rax));
+    env->eip = ldq_phys(env->vm_vmcb + offsetof(struct vmcb, save.rip));
+
+    env->regs[R_ESP] = ldq_phys(env->vm_vmcb + offsetof(struct vmcb, save.rsp));
+    env->regs[R_EAX] = ldq_phys(env->vm_vmcb + offsetof(struct vmcb, save.rax));
     env->dr[7] = ldq_phys(env->vm_vmcb + offsetof(struct vmcb, save.dr7));
     env->dr[6] = ldq_phys(env->vm_vmcb + offsetof(struct vmcb, save.dr6));
     cpu_x86_set_cpl(env, ldub_phys(env->vm_vmcb + offsetof(struct vmcb,
@@ -271,7 +271,9 @@ void helper_vmrun(CPUX86State *env, int aflag, int next_eip_addend)
     env->hflags2 |= HF2_GIF_MASK;
 
     if (int_ctl & V_IRQ_MASK) {
-        env->interrupt_request |= CPU_INTERRUPT_VIRQ;
+        CPUState *cs = CPU(x86_env_get_cpu(env));
+
+        cs->interrupt_request |= CPU_INTERRUPT_VIRQ;
     }
 
     /* maybe we need to inject an event */
@@ -300,7 +302,7 @@ void helper_vmrun(CPUX86State *env, int aflag, int next_eip_addend)
             env->exception_index = EXCP02_NMI;
             env->error_code = event_inj_err;
             env->exception_is_int = 0;
-            env->exception_next_eip = EIP;
+            env->exception_next_eip = env->eip;
             qemu_log_mask(CPU_LOG_TB_IN_ASM, "NMI");
             cpu_loop_exit(env);
             break;
@@ -316,7 +318,7 @@ void helper_vmrun(CPUX86State *env, int aflag, int next_eip_addend)
             env->exception_index = vector;
             env->error_code = event_inj_err;
             env->exception_is_int = 1;
-            env->exception_next_eip = EIP;
+            env->exception_next_eip = env->eip;
             qemu_log_mask(CPU_LOG_TB_IN_ASM, "SOFT");
             cpu_loop_exit(env);
             break;
@@ -339,9 +341,9 @@ void helper_vmload(CPUX86State *env, int aflag)
     cpu_svm_check_intercept_param(env, SVM_EXIT_VMLOAD, 0);
 
     if (aflag == 2) {
-        addr = EAX;
+        addr = env->regs[R_EAX];
     } else {
-        addr = (uint32_t)EAX;
+        addr = (uint32_t)env->regs[R_EAX];
     }
 
     qemu_log_mask(CPU_LOG_TB_IN_ASM, "vmload! " TARGET_FMT_lx
@@ -377,9 +379,9 @@ void helper_vmsave(CPUX86State *env, int aflag)
     cpu_svm_check_intercept_param(env, SVM_EXIT_VMSAVE, 0);
 
     if (aflag == 2) {
-        addr = EAX;
+        addr = env->regs[R_EAX];
     } else {
-        addr = (uint32_t)EAX;
+        addr = (uint32_t)env->regs[R_EAX];
     }
 
     qemu_log_mask(CPU_LOG_TB_IN_ASM, "vmsave! " TARGET_FMT_lx
@@ -437,9 +439,9 @@ void helper_invlpga(CPUX86State *env, int aflag)
     cpu_svm_check_intercept_param(env, SVM_EXIT_INVLPGA, 0);
 
     if (aflag == 2) {
-        addr = EAX;
+        addr = env->regs[R_EAX];
     } else {
-        addr = (uint32_t)EAX;
+        addr = (uint32_t)env->regs[R_EAX];
     }
 
     /* XXX: could use the ASID to see if it is needed to do the
@@ -487,18 +489,18 @@ void helper_svm_check_intercept_param(CPUX86State *env, uint32_t type,
                                               control.msrpm_base_pa));
             uint32_t t0, t1;
 
-            switch ((uint32_t)ECX) {
+            switch ((uint32_t)env->regs[R_ECX]) {
             case 0 ... 0x1fff:
-                t0 = (ECX * 2) % 8;
-                t1 = (ECX * 2) / 8;
+                t0 = (env->regs[R_ECX] * 2) % 8;
+                t1 = (env->regs[R_ECX] * 2) / 8;
                 break;
             case 0xc0000000 ... 0xc0001fff:
-                t0 = (8192 + ECX - 0xc0000000) * 2;
+                t0 = (8192 + env->regs[R_ECX] - 0xc0000000) * 2;
                 t1 = (t0 / 8);
                 t0 %= 8;
                 break;
             case 0xc0010000 ... 0xc0011fff:
-                t0 = (16384 + ECX - 0xc0010000) * 2;
+                t0 = (16384 + env->regs[R_ECX] - 0xc0010000) * 2;
                 t1 = (t0 / 8);
                 t0 %= 8;
                 break;
@@ -537,7 +539,7 @@ void helper_svm_check_io(CPUX86State *env, uint32_t port, uint32_t param,
         uint16_t mask = (1 << ((param >> 4) & 7)) - 1;
 
         if (lduw_phys(addr + port / 8) & (mask << (port & 7))) {
-            /* next EIP */
+            /* next env->eip */
             stq_phys(env->vm_vmcb + offsetof(struct vmcb, control.exit_info_2),
                      env->eip + next_eip_addend);
             helper_vmexit(env, SVM_EXIT_IOIO, param | (port << 16));
@@ -548,6 +550,7 @@ void helper_svm_check_io(CPUX86State *env, uint32_t port, uint32_t param,
 /* Note: currently only 32 bits of exit_code are used */
 void helper_vmexit(CPUX86State *env, uint32_t exit_code, uint64_t exit_info_1)
 {
+    CPUState *cs = CPU(x86_env_get_cpu(env));
     uint32_t int_ctl;
 
     qemu_log_mask(CPU_LOG_TB_IN_ASM, "vmexit(%08x, %016" PRIx64 ", %016"
@@ -555,7 +558,7 @@ void helper_vmexit(CPUX86State *env, uint32_t exit_code, uint64_t exit_info_1)
                   exit_code, exit_info_1,
                   ldq_phys(env->vm_vmcb + offsetof(struct vmcb,
                                                    control.exit_info_2)),
-                  EIP);
+                  env->eip);
 
     if (env->hflags & HF_INHIBIT_IRQ_MASK) {
         stl_phys(env->vm_vmcb + offsetof(struct vmcb, control.int_state),
@@ -594,7 +597,7 @@ void helper_vmexit(CPUX86State *env, uint32_t exit_code, uint64_t exit_info_1)
     int_ctl = ldl_phys(env->vm_vmcb + offsetof(struct vmcb, control.int_ctl));
     int_ctl &= ~(V_TPR_MASK | V_IRQ_MASK);
     int_ctl |= env->v_tpr & V_TPR_MASK;
-    if (env->interrupt_request & CPU_INTERRUPT_VIRQ) {
+    if (cs->interrupt_request & CPU_INTERRUPT_VIRQ) {
         int_ctl |= V_IRQ_MASK;
     }
     stl_phys(env->vm_vmcb + offsetof(struct vmcb, control.int_ctl), int_ctl);
@@ -603,8 +606,8 @@ void helper_vmexit(CPUX86State *env, uint32_t exit_code, uint64_t exit_info_1)
              cpu_compute_eflags(env));
     stq_phys(env->vm_vmcb + offsetof(struct vmcb, save.rip),
              env->eip);
-    stq_phys(env->vm_vmcb + offsetof(struct vmcb, save.rsp), ESP);
-    stq_phys(env->vm_vmcb + offsetof(struct vmcb, save.rax), EAX);
+    stq_phys(env->vm_vmcb + offsetof(struct vmcb, save.rsp), env->regs[R_ESP]);
+    stq_phys(env->vm_vmcb + offsetof(struct vmcb, save.rax), env->regs[R_EAX]);
     stq_phys(env->vm_vmcb + offsetof(struct vmcb, save.dr7), env->dr[7]);
     stq_phys(env->vm_vmcb + offsetof(struct vmcb, save.dr6), env->dr[6]);
     stb_phys(env->vm_vmcb + offsetof(struct vmcb, save.cpl),
@@ -615,7 +618,7 @@ void helper_vmexit(CPUX86State *env, uint32_t exit_code, uint64_t exit_info_1)
     env->hflags &= ~HF_SVMI_MASK;
     env->intercept = 0;
     env->intercept_exceptions = 0;
-    env->interrupt_request &= ~CPU_INTERRUPT_VIRQ;
+    cs->interrupt_request &= ~CPU_INTERRUPT_VIRQ;
     env->tsc_offset = 0;
 
     env->gdt.base  = ldq_phys(env->vm_hsave + offsetof(struct vmcb,
@@ -654,9 +657,11 @@ void helper_vmexit(CPUX86State *env, uint32_t exit_code, uint64_t exit_info_1)
     svm_load_seg_cache(env, env->vm_hsave + offsetof(struct vmcb, save.ds),
                        R_DS);
 
-    EIP = ldq_phys(env->vm_hsave + offsetof(struct vmcb, save.rip));
-    ESP = ldq_phys(env->vm_hsave + offsetof(struct vmcb, save.rsp));
-    EAX = ldq_phys(env->vm_hsave + offsetof(struct vmcb, save.rax));
+    env->eip = ldq_phys(env->vm_hsave + offsetof(struct vmcb, save.rip));
+    env->regs[R_ESP] = ldq_phys(env->vm_hsave +
+                                offsetof(struct vmcb, save.rsp));
+    env->regs[R_EAX] = ldq_phys(env->vm_hsave +
+                                offsetof(struct vmcb, save.rax));
 
     env->dr[6] = ldq_phys(env->vm_hsave + offsetof(struct vmcb, save.dr6));
     env->dr[7] = ldq_phys(env->vm_hsave + offsetof(struct vmcb, save.dr7));

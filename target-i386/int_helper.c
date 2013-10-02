@@ -18,7 +18,7 @@
  */
 
 #include "cpu.h"
-#include "host-utils.h"
+#include "qemu/host-utils.h"
 #include "helper.h"
 
 //#define DEBUG_MULDIV
@@ -45,7 +45,7 @@ void helper_divb_AL(CPUX86State *env, target_ulong t0)
 {
     unsigned int num, den, q, r;
 
-    num = (EAX & 0xffff);
+    num = (env->regs[R_EAX] & 0xffff);
     den = (t0 & 0xff);
     if (den == 0) {
         raise_exception(env, EXCP00_DIVZ);
@@ -56,14 +56,14 @@ void helper_divb_AL(CPUX86State *env, target_ulong t0)
     }
     q &= 0xff;
     r = (num % den) & 0xff;
-    EAX = (EAX & ~0xffff) | (r << 8) | q;
+    env->regs[R_EAX] = (env->regs[R_EAX] & ~0xffff) | (r << 8) | q;
 }
 
 void helper_idivb_AL(CPUX86State *env, target_ulong t0)
 {
     int num, den, q, r;
 
-    num = (int16_t)EAX;
+    num = (int16_t)env->regs[R_EAX];
     den = (int8_t)t0;
     if (den == 0) {
         raise_exception(env, EXCP00_DIVZ);
@@ -74,14 +74,14 @@ void helper_idivb_AL(CPUX86State *env, target_ulong t0)
     }
     q &= 0xff;
     r = (num % den) & 0xff;
-    EAX = (EAX & ~0xffff) | (r << 8) | q;
+    env->regs[R_EAX] = (env->regs[R_EAX] & ~0xffff) | (r << 8) | q;
 }
 
 void helper_divw_AX(CPUX86State *env, target_ulong t0)
 {
     unsigned int num, den, q, r;
 
-    num = (EAX & 0xffff) | ((EDX & 0xffff) << 16);
+    num = (env->regs[R_EAX] & 0xffff) | ((env->regs[R_EDX] & 0xffff) << 16);
     den = (t0 & 0xffff);
     if (den == 0) {
         raise_exception(env, EXCP00_DIVZ);
@@ -92,15 +92,15 @@ void helper_divw_AX(CPUX86State *env, target_ulong t0)
     }
     q &= 0xffff;
     r = (num % den) & 0xffff;
-    EAX = (EAX & ~0xffff) | q;
-    EDX = (EDX & ~0xffff) | r;
+    env->regs[R_EAX] = (env->regs[R_EAX] & ~0xffff) | q;
+    env->regs[R_EDX] = (env->regs[R_EDX] & ~0xffff) | r;
 }
 
 void helper_idivw_AX(CPUX86State *env, target_ulong t0)
 {
     int num, den, q, r;
 
-    num = (EAX & 0xffff) | ((EDX & 0xffff) << 16);
+    num = (env->regs[R_EAX] & 0xffff) | ((env->regs[R_EDX] & 0xffff) << 16);
     den = (int16_t)t0;
     if (den == 0) {
         raise_exception(env, EXCP00_DIVZ);
@@ -111,8 +111,8 @@ void helper_idivw_AX(CPUX86State *env, target_ulong t0)
     }
     q &= 0xffff;
     r = (num % den) & 0xffff;
-    EAX = (EAX & ~0xffff) | q;
-    EDX = (EDX & ~0xffff) | r;
+    env->regs[R_EAX] = (env->regs[R_EAX] & ~0xffff) | q;
+    env->regs[R_EDX] = (env->regs[R_EDX] & ~0xffff) | r;
 }
 
 void helper_divl_EAX(CPUX86State *env, target_ulong t0)
@@ -120,7 +120,7 @@ void helper_divl_EAX(CPUX86State *env, target_ulong t0)
     unsigned int den, r;
     uint64_t num, q;
 
-    num = ((uint32_t)EAX) | ((uint64_t)((uint32_t)EDX) << 32);
+    num = ((uint32_t)env->regs[R_EAX]) | ((uint64_t)((uint32_t)env->regs[R_EDX]) << 32);
     den = t0;
     if (den == 0) {
         raise_exception(env, EXCP00_DIVZ);
@@ -130,8 +130,8 @@ void helper_divl_EAX(CPUX86State *env, target_ulong t0)
     if (q > 0xffffffff) {
         raise_exception(env, EXCP00_DIVZ);
     }
-    EAX = (uint32_t)q;
-    EDX = (uint32_t)r;
+    env->regs[R_EAX] = (uint32_t)q;
+    env->regs[R_EDX] = (uint32_t)r;
 }
 
 void helper_idivl_EAX(CPUX86State *env, target_ulong t0)
@@ -139,7 +139,7 @@ void helper_idivl_EAX(CPUX86State *env, target_ulong t0)
     int den, r;
     int64_t num, q;
 
-    num = ((uint32_t)EAX) | ((uint64_t)((uint32_t)EDX) << 32);
+    num = ((uint32_t)env->regs[R_EAX]) | ((uint64_t)((uint32_t)env->regs[R_EDX]) << 32);
     den = t0;
     if (den == 0) {
         raise_exception(env, EXCP00_DIVZ);
@@ -149,8 +149,8 @@ void helper_idivl_EAX(CPUX86State *env, target_ulong t0)
     if (q != (int32_t)q) {
         raise_exception(env, EXCP00_DIVZ);
     }
-    EAX = (uint32_t)q;
-    EDX = (uint32_t)r;
+    env->regs[R_EAX] = (uint32_t)q;
+    env->regs[R_EDX] = (uint32_t)r;
 }
 
 /* bcd */
@@ -160,10 +160,10 @@ void helper_aam(CPUX86State *env, int base)
 {
     int al, ah;
 
-    al = EAX & 0xff;
+    al = env->regs[R_EAX] & 0xff;
     ah = al / base;
     al = al % base;
-    EAX = (EAX & ~0xffff) | al | (ah << 8);
+    env->regs[R_EAX] = (env->regs[R_EAX] & ~0xffff) | al | (ah << 8);
     CC_DST = al;
 }
 
@@ -171,10 +171,10 @@ void helper_aad(CPUX86State *env, int base)
 {
     int al, ah;
 
-    al = EAX & 0xff;
-    ah = (EAX >> 8) & 0xff;
+    al = env->regs[R_EAX] & 0xff;
+    ah = (env->regs[R_EAX] >> 8) & 0xff;
     al = ((ah * base) + al) & 0xff;
-    EAX = (EAX & ~0xffff) | al;
+    env->regs[R_EAX] = (env->regs[R_EAX] & ~0xffff) | al;
     CC_DST = al;
 }
 
@@ -186,8 +186,8 @@ void helper_aaa(CPUX86State *env)
 
     eflags = cpu_cc_compute_all(env, CC_OP);
     af = eflags & CC_A;
-    al = EAX & 0xff;
-    ah = (EAX >> 8) & 0xff;
+    al = env->regs[R_EAX] & 0xff;
+    ah = (env->regs[R_EAX] >> 8) & 0xff;
 
     icarry = (al > 0xf9);
     if (((al & 0x0f) > 9) || af) {
@@ -198,7 +198,7 @@ void helper_aaa(CPUX86State *env)
         eflags &= ~(CC_C | CC_A);
         al &= 0x0f;
     }
-    EAX = (EAX & ~0xffff) | al | (ah << 8);
+    env->regs[R_EAX] = (env->regs[R_EAX] & ~0xffff) | al | (ah << 8);
     CC_SRC = eflags;
 }
 
@@ -210,8 +210,8 @@ void helper_aas(CPUX86State *env)
 
     eflags = cpu_cc_compute_all(env, CC_OP);
     af = eflags & CC_A;
-    al = EAX & 0xff;
-    ah = (EAX >> 8) & 0xff;
+    al = env->regs[R_EAX] & 0xff;
+    ah = (env->regs[R_EAX] >> 8) & 0xff;
 
     icarry = (al < 6);
     if (((al & 0x0f) > 9) || af) {
@@ -222,7 +222,7 @@ void helper_aas(CPUX86State *env)
         eflags &= ~(CC_C | CC_A);
         al &= 0x0f;
     }
-    EAX = (EAX & ~0xffff) | al | (ah << 8);
+    env->regs[R_EAX] = (env->regs[R_EAX] & ~0xffff) | al | (ah << 8);
     CC_SRC = eflags;
 }
 
@@ -234,7 +234,7 @@ void helper_daa(CPUX86State *env)
     eflags = cpu_cc_compute_all(env, CC_OP);
     cf = eflags & CC_C;
     af = eflags & CC_A;
-    old_al = al = EAX & 0xff;
+    old_al = al = env->regs[R_EAX] & 0xff;
 
     eflags = 0;
     if (((al & 0x0f) > 9) || af) {
@@ -245,7 +245,7 @@ void helper_daa(CPUX86State *env)
         al = (al + 0x60) & 0xff;
         eflags |= CC_C;
     }
-    EAX = (EAX & ~0xff) | al;
+    env->regs[R_EAX] = (env->regs[R_EAX] & ~0xff) | al;
     /* well, speed is not an issue here, so we compute the flags by hand */
     eflags |= (al == 0) << 6; /* zf */
     eflags |= parity_table[al]; /* pf */
@@ -261,7 +261,7 @@ void helper_das(CPUX86State *env)
     eflags = cpu_cc_compute_all(env, CC_OP);
     cf = eflags & CC_C;
     af = eflags & CC_A;
-    al = EAX & 0xff;
+    al = env->regs[R_EAX] & 0xff;
 
     eflags = 0;
     al1 = al;
@@ -276,7 +276,7 @@ void helper_das(CPUX86State *env)
         al = (al - 0x60) & 0xff;
         eflags |= CC_C;
     }
-    EAX = (EAX & ~0xff) | al;
+    env->regs[R_EAX] = (env->regs[R_EAX] & ~0xff) | al;
     /* well, speed is not an issue here, so we compute the flags by hand */
     eflags |= (al == 0) << 6; /* zf */
     eflags |= parity_table[al]; /* pf */
@@ -374,39 +374,6 @@ static int idiv64(uint64_t *plow, uint64_t *phigh, int64_t b)
     return 0;
 }
 
-void helper_mulq_EAX_T0(CPUX86State *env, target_ulong t0)
-{
-    uint64_t r0, r1;
-
-    mulu64(&r0, &r1, EAX, t0);
-    EAX = r0;
-    EDX = r1;
-    CC_DST = r0;
-    CC_SRC = r1;
-}
-
-void helper_imulq_EAX_T0(CPUX86State *env, target_ulong t0)
-{
-    uint64_t r0, r1;
-
-    muls64(&r0, &r1, EAX, t0);
-    EAX = r0;
-    EDX = r1;
-    CC_DST = r0;
-    CC_SRC = ((int64_t)r1 != ((int64_t)r0 >> 63));
-}
-
-target_ulong helper_imulq_T0_T1(CPUX86State *env, target_ulong t0,
-                                target_ulong t1)
-{
-    uint64_t r0, r1;
-
-    muls64(&r0, &r1, t0, t1);
-    CC_DST = r0;
-    CC_SRC = ((int64_t)r1 != ((int64_t)r0 >> 63));
-    return r0;
-}
-
 void helper_divq_EAX(CPUX86State *env, target_ulong t0)
 {
     uint64_t r0, r1;
@@ -414,13 +381,13 @@ void helper_divq_EAX(CPUX86State *env, target_ulong t0)
     if (t0 == 0) {
         raise_exception(env, EXCP00_DIVZ);
     }
-    r0 = EAX;
-    r1 = EDX;
+    r0 = env->regs[R_EAX];
+    r1 = env->regs[R_EDX];
     if (div64(&r0, &r1, t0)) {
         raise_exception(env, EXCP00_DIVZ);
     }
-    EAX = r0;
-    EDX = r1;
+    env->regs[R_EAX] = r0;
+    env->regs[R_EDX] = r1;
 }
 
 void helper_idivq_EAX(CPUX86State *env, target_ulong t0)
@@ -430,55 +397,59 @@ void helper_idivq_EAX(CPUX86State *env, target_ulong t0)
     if (t0 == 0) {
         raise_exception(env, EXCP00_DIVZ);
     }
-    r0 = EAX;
-    r1 = EDX;
+    r0 = env->regs[R_EAX];
+    r1 = env->regs[R_EDX];
     if (idiv64(&r0, &r1, t0)) {
         raise_exception(env, EXCP00_DIVZ);
     }
-    EAX = r0;
-    EDX = r1;
+    env->regs[R_EAX] = r0;
+    env->regs[R_EDX] = r1;
 }
 #endif
 
+#if TARGET_LONG_BITS == 32
+# define ctztl  ctz32
+# define clztl  clz32
+#else
+# define ctztl  ctz64
+# define clztl  clz64
+#endif
+
 /* bit operations */
-target_ulong helper_bsf(target_ulong t0)
+target_ulong helper_ctz(target_ulong t0)
 {
-    int count;
-    target_ulong res;
-
-    res = t0;
-    count = 0;
-    while ((res & 1) == 0) {
-        count++;
-        res >>= 1;
-    }
-    return count;
+    return ctztl(t0);
 }
 
-target_ulong helper_lzcnt(target_ulong t0, int wordsize)
+target_ulong helper_clz(target_ulong t0)
 {
-    int count;
-    target_ulong res, mask;
-
-    if (wordsize > 0 && t0 == 0) {
-        return wordsize;
-    }
-    res = t0;
-    count = TARGET_LONG_BITS - 1;
-    mask = (target_ulong)1 << (TARGET_LONG_BITS - 1);
-    while ((res & mask) == 0) {
-        count--;
-        res <<= 1;
-    }
-    if (wordsize > 0) {
-        return wordsize - 1 - count;
-    }
-    return count;
+    return clztl(t0);
 }
 
-target_ulong helper_bsr(target_ulong t0)
+target_ulong helper_pdep(target_ulong src, target_ulong mask)
 {
-    return helper_lzcnt(t0, 0);
+    target_ulong dest = 0;
+    int i, o;
+
+    for (i = 0; mask != 0; i++) {
+        o = ctztl(mask);
+        mask &= mask - 1;
+        dest |= ((src >> i) & 1) << o;
+    }
+    return dest;
+}
+
+target_ulong helper_pext(target_ulong src, target_ulong mask)
+{
+    target_ulong dest = 0;
+    int i, o;
+
+    for (o = 0; mask != 0; o++) {
+        i = ctztl(mask);
+        mask &= mask - 1;
+        dest |= ((src >> i) & 1) << o;
+    }
+    return dest;
 }
 
 #define SHIFT 0

@@ -11,20 +11,15 @@
 #include <stdlib.h>
 #endif /* DEBUG_REMAP */
 
-#include "qemu-types.h"
+#include "exec/user/abitypes.h"
 
-#include "thunk.h"
+#include "exec/user/thunk.h"
 #include "syscall_defs.h"
 #include "syscall.h"
-#include "target_signal.h"
-#include "gdbstub.h"
-#include "qemu-queue.h"
+#include "exec/gdbstub.h"
+#include "qemu/queue.h"
 
-#if defined(CONFIG_USE_NPTL)
 #define THREAD __thread
-#else
-#define THREAD
-#endif
 
 /* This struct is used to hold certain information about the image.
  * Basically, it replicates in user space what would be certain
@@ -117,11 +112,10 @@ typedef struct TaskState {
     uint32_t v86flags;
     uint32_t v86mask;
 #endif
-#ifdef CONFIG_USE_NPTL
     abi_ulong child_tidptr;
-#endif
 #ifdef TARGET_M68K
     int sim_syscalls;
+    abi_ulong tp_value;
 #endif
 #if defined(TARGET_ARM) || defined(TARGET_M68K) || defined(TARGET_UNICORE32)
     /* Extra fields for semihosted binaries.  */
@@ -197,7 +191,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
                     abi_long arg5, abi_long arg6, abi_long arg7,
                     abi_long arg8);
 void gemu_log(const char *fmt, ...) GCC_FMT_ATTR(1, 2);
-extern THREAD CPUArchState *thread_env;
+extern THREAD CPUState *thread_cpu;
 void cpu_loop(CPUArchState *env);
 char *target_strerror(int err);
 int get_osversion(void);
@@ -217,7 +211,7 @@ unsigned long init_guest_space(unsigned long host_start,
                                unsigned long guest_start,
                                bool fixed);
 
-#include "qemu-log.h"
+#include "qemu/log.h"
 
 /* syscall.c */
 int host_to_target_waitstatus(int status);
@@ -268,10 +262,8 @@ void mmap_unlock(void);
 abi_ulong mmap_find_vma(abi_ulong, abi_ulong);
 void cpu_list_lock(void);
 void cpu_list_unlock(void);
-#if defined(CONFIG_USE_NPTL)
 void mmap_fork_start(void);
 void mmap_fork_end(int child);
-#endif
 
 /* main.c */
 extern unsigned long guest_stack_size;
@@ -287,36 +279,39 @@ static inline int access_ok(int type, abi_ulong addr, abi_ulong size)
                             (type == VERIFY_READ) ? PAGE_READ : (PAGE_READ | PAGE_WRITE)) == 0;
 }
 
-/* NOTE __get_user and __put_user use host pointers and don't check access. */
-/* These are usually used to access struct data members once the
- * struct has been locked - usually with lock_user_struct().
- */
-#define __put_user(x, hptr)\
-({ __typeof(*hptr) pu_ = (x);\
-    switch(sizeof(*hptr)) {\
-    case 1: break;\
-    case 2: pu_ = tswap16(pu_); break; \
-    case 4: pu_ = tswap32(pu_); break; \
-    case 8: pu_ = tswap64(pu_); break; \
-    default: abort();\
-    }\
-    memcpy(hptr, &pu_, sizeof(pu_)); \
-    0;\
-})
+/* NOTE __get_user and __put_user use host pointers and don't check access.
+   These are usually used to access struct data members once the struct has
+   been locked - usually with lock_user_struct.  */
 
-#define __get_user(x, hptr) \
-({ __typeof(*hptr) gu_; \
-    memcpy(&gu_, hptr, sizeof(gu_)); \
-    switch(sizeof(*hptr)) {\
-    case 1: break; \
-    case 2: gu_ = tswap16(gu_); break; \
-    case 4: gu_ = tswap32(gu_); break; \
-    case 8: gu_ = tswap64(gu_); break; \
-    default: abort();\
-    }\
-    (x) = gu_; \
-    0;\
-})
+/* Tricky points:
+   - Use __builtin_choose_expr to avoid type promotion from ?:,
+   - Invalid sizes result in a compile time error stemming from
+     the fact that abort has no parameters.
+   - It's easier to use the endian-specific unaligned load/store
+     functions than host-endian unaligned load/store plus tswapN.  */
+
+#define __put_user_e(x, hptr, e)                                        \
+  (__builtin_choose_expr(sizeof(*(hptr)) == 1, stb_p,                   \
+   __builtin_choose_expr(sizeof(*(hptr)) == 2, stw_##e##_p,             \
+   __builtin_choose_expr(sizeof(*(hptr)) == 4, stl_##e##_p,             \
+   __builtin_choose_expr(sizeof(*(hptr)) == 8, stq_##e##_p, abort))))   \
+     ((hptr), (x)), 0)
+
+#define __get_user_e(x, hptr, e)                                        \
+  ((x) = (typeof(*hptr))(                                               \
+   __builtin_choose_expr(sizeof(*(hptr)) == 1, ldub_p,                  \
+   __builtin_choose_expr(sizeof(*(hptr)) == 2, lduw_##e##_p,            \
+   __builtin_choose_expr(sizeof(*(hptr)) == 4, ldl_##e##_p,             \
+   __builtin_choose_expr(sizeof(*(hptr)) == 8, ldq_##e##_p, abort))))   \
+     (hptr)), 0)
+
+#ifdef TARGET_WORDS_BIGENDIAN
+# define __put_user(x, hptr)  __put_user_e(x, hptr, be)
+# define __get_user(x, hptr)  __get_user_e(x, hptr, be)
+#else
+# define __put_user(x, hptr)  __put_user_e(x, hptr, le)
+# define __get_user(x, hptr)  __get_user_e(x, hptr, le)
+#endif
 
 /* put_user()/get_user() take a guest address and check access */
 /* These are usually used to access an atomic data type, such as an int,
@@ -446,8 +441,13 @@ static inline void *lock_user_string(abi_ulong guest_addr)
 #define unlock_user_struct(host_ptr, guest_addr, copy)		\
     unlock_user(host_ptr, guest_addr, (copy) ? sizeof(*host_ptr) : 0)
 
-#if defined(CONFIG_USE_NPTL)
 #include <pthread.h>
-#endif
+
+/* Include target-specific struct and function definitions;
+ * they may need access to the target-independent structures
+ * above, so include them last.
+ */
+#include "target_cpu.h"
+#include "target_signal.h"
 
 #endif /* QEMU_H */

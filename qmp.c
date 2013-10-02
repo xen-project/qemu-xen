@@ -14,15 +14,16 @@
  */
 
 #include "qemu-common.h"
-#include "sysemu.h"
+#include "sysemu/sysemu.h"
 #include "qmp-commands.h"
+#include "sysemu/char.h"
 #include "ui/qemu-spice.h"
 #include "ui/vnc.h"
-#include "kvm.h"
-#include "arch_init.h"
+#include "sysemu/kvm.h"
+#include "sysemu/arch_init.h"
 #include "hw/qdev.h"
-#include "blockdev.h"
-#include "qemu/qom-qobject.h"
+#include "sysemu/blockdev.h"
+#include "qom/qom-qobject.h"
 #include "hw/boards.h"
 
 NameInfo *qmp_query_name(Error **errp)
@@ -158,8 +159,7 @@ void qmp_cont(Error **errp)
 {
     Error *local_err = NULL;
 
-    if (runstate_check(RUN_STATE_INTERNAL_ERROR) ||
-               runstate_check(RUN_STATE_SHUTDOWN)) {
+    if (runstate_needs_reset()) {
         error_set(errp, QERR_RESET_REQUIRED);
         return;
     } else if (runstate_check(RUN_STATE_SUSPENDED)) {

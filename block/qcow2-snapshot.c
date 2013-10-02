@@ -23,7 +23,7 @@
  */
 
 #include "qemu-common.h"
-#include "block_int.h"
+#include "block/block_int.h"
 #include "block/qcow2.h"
 
 typedef struct QEMU_PACKED QCowSnapshotHeader {
@@ -180,10 +180,13 @@ static int qcow2_write_snapshots(BlockDriverState *bs)
 
     /* Allocate space for the new snapshot list */
     snapshots_offset = qcow2_alloc_clusters(bs, snapshots_size);
-    bdrv_flush(bs->file);
     offset = snapshots_offset;
     if (offset < 0) {
         return offset;
+    }
+    ret = bdrv_flush(bs);
+    if (ret < 0) {
+        return ret;
     }
 
     /* Write all snapshots to the new list */
@@ -259,7 +262,8 @@ static int qcow2_write_snapshots(BlockDriverState *bs)
     }
 
     /* free the old snapshot table */
-    qcow2_free_clusters(bs, s->snapshots_offset, s->snapshots_size);
+    qcow2_free_clusters(bs, s->snapshots_offset, s->snapshots_size,
+                        QCOW2_DISCARD_SNAPSHOT);
     s->snapshots_offset = snapshots_offset;
     s->snapshots_size = snapshots_size;
     return 0;
@@ -374,11 +378,6 @@ int qcow2_snapshot_create(BlockDriverState *bs, QEMUSnapshotInfo *sn_info)
      * to the new L1 table.
      */
     ret = qcow2_update_snapshot_refcount(bs, s->l1_table_offset, s->l1_size, 1);
-    if (ret < 0) {
-        goto fail;
-    }
-
-    ret = bdrv_flush(bs);
     if (ret < 0) {
         goto fail;
     }
@@ -571,7 +570,8 @@ int qcow2_snapshot_delete(BlockDriverState *bs, const char *snapshot_id)
     if (ret < 0) {
         return ret;
     }
-    qcow2_free_clusters(bs, sn.l1_table_offset, sn.l1_size * sizeof(uint64_t));
+    qcow2_free_clusters(bs, sn.l1_table_offset, sn.l1_size * sizeof(uint64_t),
+                        QCOW2_DISCARD_SNAPSHOT);
 
     /* must update the copied flag on the current cluster offsets */
     ret = qcow2_update_snapshot_refcount(bs, s->l1_table_offset, s->l1_size, 0);

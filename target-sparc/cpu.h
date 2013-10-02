@@ -3,7 +3,7 @@
 
 #include "config.h"
 #include "qemu-common.h"
-#include "bswap.h"
+#include "qemu/bswap.h"
 
 #if !defined(TARGET_SPARC64)
 #define TARGET_LONG_BITS 32
@@ -25,9 +25,9 @@
 
 #define CPUArchState struct CPUSPARCState
 
-#include "cpu-defs.h"
+#include "exec/cpu-defs.h"
 
-#include "softfloat.h"
+#include "fpu/softfloat.h"
 
 #define TARGET_HAS_ICE 1
 
@@ -270,6 +270,7 @@ typedef struct sparc_def_t {
 #define CPU_FEATURE_TA0_SHUTDOWN (1 << 14) /* Shutdown on "ta 0x0" */
 #define CPU_FEATURE_ASR17        (1 << 15)
 #define CPU_FEATURE_CACHE_CTRL   (1 << 16)
+#define CPU_FEATURE_POWERDOWN    (1 << 17)
 
 #ifndef TARGET_SPARC64
 #define CPU_DEFAULT_FEATURES (CPU_FEATURE_FLOAT | CPU_FEATURE_SWAP |  \
@@ -392,7 +393,6 @@ struct CPUSPARCState {
     target_ulong cc_dst;
     uint32_t cc_op;
 
-    target_ulong t0, t1; /* temporaries live across basic blocks */
     target_ulong cond; /* conditional branch result (XXX: save it in a
                           temporary register when possible) */
 
@@ -526,9 +526,8 @@ target_ulong mmu_probe(CPUSPARCState *env, target_ulong address, int mmulev);
 void dump_mmu(FILE *f, fprintf_function cpu_fprintf, CPUSPARCState *env);
 
 #if !defined(TARGET_SPARC64) && !defined(CONFIG_USER_ONLY)
-int target_memory_rw_debug(CPUSPARCState *env, target_ulong addr,
-                           uint8_t *buf, int len, int is_write);
-#define TARGET_CPU_MEMORY_RW_DEBUG
+int sparc_cpu_memory_rw_debug(CPUState *cpu, vaddr addr,
+                              uint8_t *buf, int len, bool is_write);
 #endif
 
 
@@ -553,7 +552,6 @@ int cpu_cwp_dec(CPUSPARCState *env1, int cwp);
 void cpu_set_cwp(CPUSPARCState *env1, int new_cwp);
 
 /* int_helper.c */
-void do_interrupt(CPUSPARCState *env);
 void leon3_irq_manager(CPUSPARCState *env, void *irq_manager, int intno);
 
 /* sun4m.c, sun4u.c */
@@ -583,8 +581,9 @@ static inline int tlb_compare_context(const SparcTLBEntry *tlb,
 
 /* cpu-exec.c */
 #if !defined(CONFIG_USER_ONLY)
-void cpu_unassigned_access(CPUSPARCState *env1, hwaddr addr,
-                           int is_write, int is_exec, int is_asi, int size);
+void sparc_cpu_unassigned_access(CPUState *cpu, hwaddr addr,
+                                 bool is_write, bool is_exec, int is_asi,
+                                 unsigned size);
 #if defined(TARGET_SPARC64)
 hwaddr cpu_get_phys_page_nofault(CPUSPARCState *env, target_ulong addr,
                                            int mmu_idx);
@@ -690,19 +689,7 @@ static inline int cpu_pil_allowed(CPUSPARCState *env1, int pil)
 #endif
 }
 
-#if defined(CONFIG_USER_ONLY)
-static inline void cpu_clone_regs(CPUSPARCState *env, target_ulong newsp)
-{
-    if (newsp)
-        env->regwptr[22] = newsp;
-    env->regwptr[0] = 0;
-    /* FIXME: Do we also need to clear CF?  */
-    /* XXXXX */
-    printf ("HELPME: %s:%d\n", __FILE__, __LINE__);
-}
-#endif
-
-#include "cpu-all.h"
+#include "exec/cpu-all.h"
 
 #ifdef TARGET_SPARC64
 /* sun4u.c */
@@ -711,7 +698,6 @@ uint64_t cpu_tick_get_count(CPUTimer *timer);
 void cpu_tick_set_limit(CPUTimer *timer, uint64_t limit);
 trap_state* cpu_tsptr(CPUSPARCState* env);
 #endif
-void cpu_restore_state2(CPUSPARCState *env, uintptr_t retaddr);
 
 #define TB_FLAG_FPU_ENABLED (1 << 4)
 #define TB_FLAG_AM_ENABLED (1 << 5)
@@ -763,18 +749,13 @@ static inline bool tb_am_enabled(int tb_flags)
 
 static inline bool cpu_has_work(CPUState *cpu)
 {
-    CPUSPARCState *env1 = &SPARC_CPU(cpu)->env;
+    SPARCCPU *sparc_cpu = SPARC_CPU(cpu);
+    CPUSPARCState *env1 = &sparc_cpu->env;
 
-    return (env1->interrupt_request & CPU_INTERRUPT_HARD) &&
+    return (cpu->interrupt_request & CPU_INTERRUPT_HARD) &&
            cpu_interrupts_enabled(env1);
 }
 
-#include "exec-all.h"
-
-static inline void cpu_pc_from_tb(CPUSPARCState *env, TranslationBlock *tb)
-{
-    env->pc = tb->pc;
-    env->npc = tb->cs_base;
-}
+#include "exec/exec-all.h"
 
 #endif

@@ -26,14 +26,17 @@
 #include "cpu.h"
 
 #if !defined(CONFIG_USER_ONLY)
-#include "hw/sh_intc.h"
+#include "hw/sh4/sh_intc.h"
 #endif
 
 #if defined(CONFIG_USER_ONLY)
 
-void do_interrupt (CPUSH4State *env)
+void superh_cpu_do_interrupt(CPUState *cs)
 {
-  env->exception_index = -1;
+    SuperHCPU *cpu = SUPERH_CPU(cs);
+    CPUSH4State *env = &cpu->env;
+
+    env->exception_index = -1;
 }
 
 int cpu_sh4_handle_mmu_fault(CPUSH4State * env, target_ulong address, int rw,
@@ -78,9 +81,11 @@ int cpu_sh4_is_cached(CPUSH4State * env, target_ulong addr)
 #define MMU_DADDR_ERROR_READ     (-12)
 #define MMU_DADDR_ERROR_WRITE    (-13)
 
-void do_interrupt(CPUSH4State * env)
+void superh_cpu_do_interrupt(CPUState *cs)
 {
-    int do_irq = env->interrupt_request & CPU_INTERRUPT_HARD;
+    SuperHCPU *cpu = SUPERH_CPU(cs);
+    CPUSH4State *env = &cpu->env;
+    int do_irq = cs->interrupt_request & CPU_INTERRUPT_HARD;
     int do_exp, irq_vector = env->exception_index;
 
     /* prioritize exceptions over interrupts */
@@ -154,7 +159,7 @@ void do_interrupt(CPUSH4State * env)
 	}
 	qemu_log("exception 0x%03x [%s] raised\n",
 		  irq_vector, expname);
-	log_cpu_state(env, 0);
+        log_cpu_state(cs, 0);
     }
 
     env->ssr = env->sr;
@@ -503,12 +508,13 @@ int cpu_sh4_handle_mmu_fault(CPUSH4State * env, target_ulong address, int rw,
     return 0;
 }
 
-hwaddr cpu_get_phys_page_debug(CPUSH4State * env, target_ulong addr)
+hwaddr superh_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
 {
+    SuperHCPU *cpu = SUPERH_CPU(cs);
     target_ulong physical;
     int prot;
 
-    get_physical_address(env, &physical, &prot, addr, 0, 0);
+    get_physical_address(&cpu->env, &physical, &prot, addr, 0, 0);
     return physical;
 }
 

@@ -22,14 +22,13 @@
  * THE SOFTWARE.
  */
 
-#include "sysemu.h"
-#include "net.h"
-#include "monitor.h"
-#include "console.h"
+#include "sysemu/sysemu.h"
+#include "monitor/monitor.h"
+#include "ui/console.h"
 
 #include "hw/hw.h"
 
-#include "qemu-timer.h"
+#include "qemu/timer.h"
 #ifdef CONFIG_POSIX
 #include <pthread.h>
 #endif
@@ -478,7 +477,7 @@ static void host_alarm_handler(int host_signum)
 
 #if defined(__linux__)
 
-#include "compatfd.h"
+#include "qemu/compatfd.h"
 
 static int dynticks_start_timer(struct qemu_alarm_timer *t)
 {
@@ -625,28 +624,14 @@ static void CALLBACK mm_alarm_handler(UINT uTimerID, UINT uMsg,
 static int mm_start_timer(struct qemu_alarm_timer *t)
 {
     timeGetDevCaps(&mm_tc, sizeof(mm_tc));
-
-    timeBeginPeriod(mm_tc.wPeriodMin);
-
-    mm_timer = timeSetEvent(mm_tc.wPeriodMin,   /* interval (ms) */
-                            mm_tc.wPeriodMin,   /* resolution */
-                            mm_alarm_handler,   /* function */
-                            (DWORD_PTR)t,       /* parameter */
-                            TIME_ONESHOT | TIME_CALLBACK_FUNCTION);
-
-    if (!mm_timer) {
-        fprintf(stderr, "Failed to initialize win32 alarm timer\n");
-        timeEndPeriod(mm_tc.wPeriodMin);
-        return -1;
-    }
-
     return 0;
 }
 
 static void mm_stop_timer(struct qemu_alarm_timer *t)
 {
-    timeKillEvent(mm_timer);
-    timeEndPeriod(mm_tc.wPeriodMin);
+    if (mm_timer) {
+        timeKillEvent(mm_timer);
+    }
 }
 
 static void mm_rearm_timer(struct qemu_alarm_timer *t, int64_t delta)
@@ -658,7 +643,9 @@ static void mm_rearm_timer(struct qemu_alarm_timer *t, int64_t delta)
         nearest_delta_ms = mm_tc.wPeriodMax;
     }
 
-    timeKillEvent(mm_timer);
+    if (mm_timer) {
+        timeKillEvent(mm_timer);
+    }
     mm_timer = timeSetEvent((UINT)nearest_delta_ms,
                             mm_tc.wPeriodMin,
                             mm_alarm_handler,

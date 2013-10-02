@@ -25,11 +25,11 @@
 
 #include <libvdeplug.h>
 
-#include "net.h"
+#include "net/net.h"
 #include "clients.h"
-#include "qemu-char.h"
 #include "qemu-common.h"
-#include "qemu-option.h"
+#include "qemu/option.h"
+#include "qemu/main-loop.h"
 
 typedef struct VDEState {
     NetClientState nc;
@@ -39,7 +39,7 @@ typedef struct VDEState {
 static void vde_to_qemu(void *opaque)
 {
     VDEState *s = opaque;
-    uint8_t buf[4096];
+    uint8_t buf[NET_BUFSIZE];
     int size;
 
     size = vde_recv(s->vde, (char *)buf, sizeof(buf), 0);

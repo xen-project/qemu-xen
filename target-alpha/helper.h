@@ -1,4 +1,4 @@
-#include "def-helper.h"
+#include "exec/def-helper.h"
 
 DEF_HELPER_3(excp, noreturn, env, int, int)
 DEF_HELPER_FLAGS_1(load_pcc, TCG_CALL_NO_RWG_SE, i64, env)
@@ -9,7 +9,6 @@ DEF_HELPER_FLAGS_3(subqv, TCG_CALL_NO_WG, i64, env, i64, i64)
 DEF_HELPER_FLAGS_3(sublv, TCG_CALL_NO_WG, i64, env, i64, i64)
 DEF_HELPER_FLAGS_3(mullv, TCG_CALL_NO_WG, i64, env, i64, i64)
 DEF_HELPER_FLAGS_3(mulqv, TCG_CALL_NO_WG, i64, env, i64, i64)
-DEF_HELPER_FLAGS_2(umulh, TCG_CALL_NO_RWG_SE, i64, i64, i64)
 
 DEF_HELPER_FLAGS_1(ctpop, TCG_CALL_NO_RWG_SE, i64, i64)
 DEF_HELPER_FLAGS_1(ctlz, TCG_CALL_NO_RWG_SE, i64, i64)
@@ -115,8 +114,9 @@ DEF_HELPER_FLAGS_2(tbis, TCG_CALL_NO_RWG, void, env, i64)
 
 DEF_HELPER_1(halt, void, i64);
 
-DEF_HELPER_FLAGS_0(get_time, TCG_CALL_NO_RWG, i64)
+DEF_HELPER_FLAGS_0(get_vmtime, TCG_CALL_NO_RWG, i64)
+DEF_HELPER_FLAGS_0(get_walltime, TCG_CALL_NO_RWG, i64)
 DEF_HELPER_FLAGS_2(set_alarm, TCG_CALL_NO_RWG, void, env, i64)
 #endif
 
-#include "def-helper.h"
+#include "exec/def-helper.h"

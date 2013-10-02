@@ -8,8 +8,8 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
-#ifndef _UAPIVFIO_H
-#define _UAPIVFIO_H
+#ifndef VFIO_H
+#define VFIO_H
 
 #include <linux/types.h>
 #include <linux/ioctl.h>
@@ -303,6 +303,15 @@ enum {
 	VFIO_PCI_BAR5_REGION_INDEX,
 	VFIO_PCI_ROM_REGION_INDEX,
 	VFIO_PCI_CONFIG_REGION_INDEX,
+	/*
+	 * Expose VGA regions defined for PCI base class 03, subclass 00.
+	 * This includes I/O port ranges 0x3b0 to 0x3bb and 0x3c0 to 0x3df
+	 * as well as the MMIO range 0xa0000 to 0xbffff.  Each implemented
+	 * range is found at it's identity mapped offset from the region
+	 * offset, for example 0x3b0 is region_info.offset + 0x3b0.  Areas
+	 * between described ranges are unimplemented.
+	 */
+	VFIO_PCI_VGA_REGION_INDEX,
 	VFIO_PCI_NUM_REGIONS
 };
 
@@ -310,6 +319,7 @@ enum {
 	VFIO_PCI_INTX_IRQ_INDEX,
 	VFIO_PCI_MSI_IRQ_INDEX,
 	VFIO_PCI_MSIX_IRQ_INDEX,
+	VFIO_PCI_ERR_IRQ_INDEX,
 	VFIO_PCI_NUM_IRQS
 };
 
@@ -365,4 +375,4 @@ struct vfio_iommu_type1_dma_unmap {
 
 #define VFIO_IOMMU_UNMAP_DMA _IO(VFIO_TYPE, VFIO_BASE + 14)
 
-#endif /* _UAPIVFIO_H */
+#endif /* VFIO_H */

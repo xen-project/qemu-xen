@@ -18,10 +18,10 @@
  */
 
 #include "cpu.h"
-#include "kvm.h"
+#include "sysemu/kvm.h"
 #ifndef CONFIG_USER_ONLY
-#include "sysemu.h"
-#include "monitor.h"
+#include "sysemu/sysemu.h"
+#include "monitor/monitor.h"
 #endif
 
 //#define DEBUG_MMU
@@ -55,7 +55,7 @@ int cpu_x86_support_mca_broadcast(CPUX86State *env)
 /***********************************************************/
 /* x86 debug */
 
-static const char *cc_op_str[] = {
+static const char *cc_op_str[CC_OP_NB] = {
     "DYNAMIC",
     "EFLAGS",
 
@@ -108,6 +108,17 @@ static const char *cc_op_str[] = {
     "SARW",
     "SARL",
     "SARQ",
+
+    "BMILGB",
+    "BMILGW",
+    "BMILGL",
+    "BMILGQ",
+
+    "ADCX",
+    "ADOX",
+    "ADCOX",
+
+    "CLR",
 };
 
 static void
@@ -168,16 +179,18 @@ done:
 #define DUMP_CODE_BYTES_TOTAL    50
 #define DUMP_CODE_BYTES_BACKWARD 20
 
-void cpu_dump_state(CPUX86State *env, FILE *f, fprintf_function cpu_fprintf,
-                    int flags)
+void x86_cpu_dump_state(CPUState *cs, FILE *f, fprintf_function cpu_fprintf,
+                        int flags)
 {
+    X86CPU *cpu = X86_CPU(cs);
+    CPUX86State *env = &cpu->env;
     int eflags, i, nb;
     char cc_op_name[32];
     static const char *seg_name[6] = { "ES", "CS", "SS", "DS", "FS", "GS" };
 
-    cpu_synchronize_state(env);
+    cpu_synchronize_state(cs);
 
-    eflags = env->eflags;
+    eflags = cpu_compute_eflags(env);
 #ifdef TARGET_X86_64
     if (env->hflags & HF_CS64_MASK) {
         cpu_fprintf(f,
@@ -214,7 +227,7 @@ void cpu_dump_state(CPUX86State *env, FILE *f, fprintf_function cpu_fprintf,
                     (env->hflags >> HF_INHIBIT_IRQ_SHIFT) & 1,
                     (env->a20_mask >> 20) & 1,
                     (env->hflags >> HF_SMM_SHIFT) & 1,
-                    env->halted);
+                    cs->halted);
     } else
 #endif
     {
@@ -241,7 +254,7 @@ void cpu_dump_state(CPUX86State *env, FILE *f, fprintf_function cpu_fprintf,
                     (env->hflags >> HF_INHIBIT_IRQ_SHIFT) & 1,
                     (env->a20_mask >> 20) & 1,
                     (env->hflags >> HF_SMM_SHIFT) & 1,
-                    env->halted);
+                    cs->halted);
     }
 
     for(i = 0; i < 6; i++) {
@@ -350,7 +363,7 @@ void cpu_dump_state(CPUX86State *env, FILE *f, fprintf_function cpu_fprintf,
 
         cpu_fprintf(f, "Code=");
         for (i = 0; i < DUMP_CODE_BYTES_TOTAL; i++) {
-            if (cpu_memory_rw_debug(env, base - offs + i, &code, 1, 0) == 0) {
+            if (cpu_memory_rw_debug(cs, base - offs + i, &code, 1, 0) == 0) {
                 snprintf(codestr, sizeof(codestr), "%02x", code);
             } else {
                 snprintf(codestr, sizeof(codestr), "??");
@@ -366,8 +379,10 @@ void cpu_dump_state(CPUX86State *env, FILE *f, fprintf_function cpu_fprintf,
 /* x86 mmu */
 /* XXX: add PGE support */
 
-void cpu_x86_set_a20(CPUX86State *env, int a20_state)
+void x86_cpu_set_a20(X86CPU *cpu, int a20_state)
 {
+    CPUX86State *env = &cpu->env;
+
     a20_state = (a20_state != 0);
     if (a20_state != ((env->a20_mask >> 20) & 1)) {
 #if defined(DEBUG_MMU)
@@ -375,7 +390,7 @@ void cpu_x86_set_a20(CPUX86State *env, int a20_state)
 #endif
         /* if the cpu is currently executing code, we must unlink it and
            all the potentially executing TB */
-        cpu_interrupt(env, CPU_INTERRUPT_EXITTB);
+        cpu_interrupt(CPU(cpu), CPU_INTERRUPT_EXITTB);
 
         /* when a20 is changed, all the MMU mappings are invalid, so
            we must flush everything */
@@ -449,7 +464,7 @@ void cpu_x86_update_cr4(CPUX86State *env, uint32_t new_cr4)
         tlb_flush(env, 1);
     }
     /* SSE handling */
-    if (!(env->cpuid_features & CPUID_SSE)) {
+    if (!(env->features[FEAT_1_EDX] & CPUID_SSE)) {
         new_cr4 &= ~CR4_OSFXSR_MASK;
     }
     env->hflags &= ~HF_OSFXSR_MASK;
@@ -457,7 +472,7 @@ void cpu_x86_update_cr4(CPUX86State *env, uint32_t new_cr4)
         env->hflags |= HF_OSFXSR_MASK;
     }
 
-    if (!(env->cpuid_7_0_ebx_features & CPUID_7_0_EBX_SMAP)) {
+    if (!(env->features[FEAT_7_0_EBX] & CPUID_7_0_EBX_SMAP)) {
         new_cr4 &= ~CR4_SMAP_MASK;
     }
     env->hflags &= ~HF_SMAP_MASK;
@@ -869,8 +884,10 @@ int cpu_x86_handle_mmu_fault(CPUX86State *env, target_ulong addr,
     return 1;
 }
 
-hwaddr cpu_get_phys_page_debug(CPUX86State *env, target_ulong addr)
+hwaddr x86_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
 {
+    X86CPU *cpu = X86_CPU(cs);
+    CPUX86State *env = &cpu->env;
     target_ulong pde_addr, pte_addr;
     uint64_t pte;
     hwaddr paddr;
@@ -966,30 +983,35 @@ hwaddr cpu_get_phys_page_debug(CPUX86State *env, target_ulong addr)
 
 void hw_breakpoint_insert(CPUX86State *env, int index)
 {
-    int type, err = 0;
+    int type = 0, err = 0;
 
     switch (hw_breakpoint_type(env->dr[7], index)) {
-    case 0:
-        if (hw_breakpoint_enabled(env->dr[7], index))
+    case DR7_TYPE_BP_INST:
+        if (hw_breakpoint_enabled(env->dr[7], index)) {
             err = cpu_breakpoint_insert(env, env->dr[index], BP_CPU,
                                         &env->cpu_breakpoint[index]);
+        }
         break;
-    case 1:
+    case DR7_TYPE_DATA_WR:
         type = BP_CPU | BP_MEM_WRITE;
-        goto insert_wp;
-    case 2:
-         /* No support for I/O watchpoints yet */
         break;
-    case 3:
+    case DR7_TYPE_IO_RW:
+        /* No support for I/O watchpoints yet */
+        break;
+    case DR7_TYPE_DATA_RW:
         type = BP_CPU | BP_MEM_ACCESS;
-    insert_wp:
+        break;
+    }
+
+    if (type != 0) {
         err = cpu_watchpoint_insert(env, env->dr[index],
                                     hw_breakpoint_len(env->dr[7], index),
                                     type, &env->cpu_watchpoint[index]);
-        break;
     }
-    if (err)
+
+    if (err) {
         env->cpu_breakpoint[index] = NULL;
+    }
 }
 
 void hw_breakpoint_remove(CPUX86State *env, int index)
@@ -997,39 +1019,60 @@ void hw_breakpoint_remove(CPUX86State *env, int index)
     if (!env->cpu_breakpoint[index])
         return;
     switch (hw_breakpoint_type(env->dr[7], index)) {
-    case 0:
-        if (hw_breakpoint_enabled(env->dr[7], index))
+    case DR7_TYPE_BP_INST:
+        if (hw_breakpoint_enabled(env->dr[7], index)) {
             cpu_breakpoint_remove_by_ref(env, env->cpu_breakpoint[index]);
+        }
         break;
-    case 1:
-    case 3:
+    case DR7_TYPE_DATA_WR:
+    case DR7_TYPE_DATA_RW:
         cpu_watchpoint_remove_by_ref(env, env->cpu_watchpoint[index]);
         break;
-    case 2:
+    case DR7_TYPE_IO_RW:
         /* No support for I/O watchpoints yet */
         break;
     }
 }
 
-int check_hw_breakpoints(CPUX86State *env, int force_dr6_update)
+bool check_hw_breakpoints(CPUX86State *env, bool force_dr6_update)
 {
     target_ulong dr6;
-    int reg, type;
-    int hit_enabled = 0;
+    int reg;
+    bool hit_enabled = false;
 
     dr6 = env->dr[6] & ~0xf;
-    for (reg = 0; reg < 4; reg++) {
-        type = hw_breakpoint_type(env->dr[7], reg);
-        if ((type == 0 && env->dr[reg] == env->eip) ||
-            ((type & 1) && env->cpu_watchpoint[reg] &&
-             (env->cpu_watchpoint[reg]->flags & BP_WATCHPOINT_HIT))) {
+    for (reg = 0; reg < DR7_MAX_BP; reg++) {
+        bool bp_match = false;
+        bool wp_match = false;
+
+        switch (hw_breakpoint_type(env->dr[7], reg)) {
+        case DR7_TYPE_BP_INST:
+            if (env->dr[reg] == env->eip) {
+                bp_match = true;
+            }
+            break;
+        case DR7_TYPE_DATA_WR:
+        case DR7_TYPE_DATA_RW:
+            if (env->cpu_watchpoint[reg] &&
+                env->cpu_watchpoint[reg]->flags & BP_WATCHPOINT_HIT) {
+                wp_match = true;
+            }
+            break;
+        case DR7_TYPE_IO_RW:
+            break;
+        }
+        if (bp_match || wp_match) {
             dr6 |= 1 << reg;
-            if (hw_breakpoint_enabled(env->dr[7], reg))
-                hit_enabled = 1;
+            if (hw_breakpoint_enabled(env->dr[7], reg)) {
+                hit_enabled = true;
+            }
         }
     }
-    if (hit_enabled || force_dr6_update)
+
+    if (hit_enabled || force_dr6_update) {
         env->dr[6] = dr6;
+    }
+
     return hit_enabled;
 }
 
@@ -1040,16 +1083,17 @@ void breakpoint_handler(CPUX86State *env)
     if (env->watchpoint_hit) {
         if (env->watchpoint_hit->flags & BP_CPU) {
             env->watchpoint_hit = NULL;
-            if (check_hw_breakpoints(env, 0))
+            if (check_hw_breakpoints(env, false)) {
                 raise_exception(env, EXCP01_DB);
-            else
+            } else {
                 cpu_resume_from_signal(env, NULL);
+            }
         }
     } else {
         QTAILQ_FOREACH(bp, &env->breakpoints, entry)
             if (bp->pc == env->eip) {
                 if (bp->flags & BP_CPU) {
-                    check_hw_breakpoints(env, 1);
+                    check_hw_breakpoints(env, true);
                     raise_exception(env, EXCP01_DB);
                 }
                 break;
@@ -1059,7 +1103,7 @@ void breakpoint_handler(CPUX86State *env)
 
 typedef struct MCEInjectionParams {
     Monitor *mon;
-    CPUX86State *env;
+    X86CPU *cpu;
     int bank;
     uint64_t status;
     uint64_t mcg_status;
@@ -1071,10 +1115,11 @@ typedef struct MCEInjectionParams {
 static void do_inject_x86_mce(void *data)
 {
     MCEInjectionParams *params = data;
-    CPUX86State *cenv = params->env;
+    CPUX86State *cenv = &params->cpu->env;
+    CPUState *cpu = CPU(params->cpu);
     uint64_t *banks = cenv->mce_banks + 4 * params->bank;
 
-    cpu_synchronize_state(cenv);
+    cpu_synchronize_state(cpu);
 
     /*
      * If there is an MCE exception being processed, ignore this SRAO MCE
@@ -1094,7 +1139,7 @@ static void do_inject_x86_mce(void *data)
         if ((cenv->mcg_cap & MCG_CTL_P) && cenv->mcg_ctl != ~(uint64_t)0) {
             monitor_printf(params->mon,
                            "CPU %d: Uncorrected error reporting disabled\n",
-                           cenv->cpu_index);
+                           cpu->cpu_index);
             return;
         }
 
@@ -1106,7 +1151,7 @@ static void do_inject_x86_mce(void *data)
             monitor_printf(params->mon,
                            "CPU %d: Uncorrected error reporting disabled for"
                            " bank %d\n",
-                           cenv->cpu_index, params->bank);
+                           cpu->cpu_index, params->bank);
             return;
         }
 
@@ -1115,7 +1160,7 @@ static void do_inject_x86_mce(void *data)
             monitor_printf(params->mon,
                            "CPU %d: Previous MCE still in progress, raising"
                            " triple fault\n",
-                           cenv->cpu_index);
+                           cpu->cpu_index);
             qemu_log_mask(CPU_LOG_RESET, "Triple fault\n");
             qemu_system_reset_request();
             return;
@@ -1127,7 +1172,7 @@ static void do_inject_x86_mce(void *data)
         banks[3] = params->misc;
         cenv->mcg_status = params->mcg_status;
         banks[1] = params->status;
-        cpu_interrupt(cenv, CPU_INTERRUPT_MCE);
+        cpu_interrupt(cpu, CPU_INTERRUPT_MCE);
     } else if (!(banks[1] & MCI_STATUS_VAL)
                || !(banks[1] & MCI_STATUS_UC)) {
         if (banks[1] & MCI_STATUS_VAL) {
@@ -1145,10 +1190,11 @@ void cpu_x86_inject_mce(Monitor *mon, X86CPU *cpu, int bank,
                         uint64_t status, uint64_t mcg_status, uint64_t addr,
                         uint64_t misc, int flags)
 {
+    CPUState *cs = CPU(cpu);
     CPUX86State *cenv = &cpu->env;
     MCEInjectionParams params = {
         .mon = mon,
-        .env = cenv,
+        .cpu = cpu,
         .bank = bank,
         .status = status,
         .mcg_status = mcg_status,
@@ -1157,7 +1203,6 @@ void cpu_x86_inject_mce(Monitor *mon, X86CPU *cpu, int bank,
         .flags = flags,
     };
     unsigned bank_num = cenv->mcg_cap & 0xff;
-    CPUX86State *env;
 
     if (!cenv->mcg_cap) {
         monitor_printf(mon, "MCE injection not supported\n");
@@ -1177,34 +1222,34 @@ void cpu_x86_inject_mce(Monitor *mon, X86CPU *cpu, int bank,
         return;
     }
 
-    run_on_cpu(CPU(cpu), do_inject_x86_mce, &params);
+    run_on_cpu(cs, do_inject_x86_mce, &params);
     if (flags & MCE_INJECT_BROADCAST) {
+        CPUState *other_cs;
+
         params.bank = 1;
         params.status = MCI_STATUS_VAL | MCI_STATUS_UC;
         params.mcg_status = MCG_STATUS_MCIP | MCG_STATUS_RIPV;
         params.addr = 0;
         params.misc = 0;
-        for (env = first_cpu; env != NULL; env = env->next_cpu) {
-            if (cenv == env) {
+        for (other_cs = first_cpu; other_cs != NULL;
+             other_cs = other_cs->next_cpu) {
+            if (other_cs == cs) {
                 continue;
             }
-            params.env = env;
-            run_on_cpu(CPU(cpu), do_inject_x86_mce, &params);
+            params.cpu = X86_CPU(other_cs);
+            run_on_cpu(other_cs, do_inject_x86_mce, &params);
         }
     }
 }
 
 void cpu_report_tpr_access(CPUX86State *env, TPRAccess access)
 {
-    TranslationBlock *tb;
-
     if (kvm_enabled()) {
         env->tpr_access_type = access;
 
-        cpu_interrupt(env, CPU_INTERRUPT_TPR);
+        cpu_interrupt(CPU(x86_env_get_cpu(env)), CPU_INTERRUPT_TPR);
     } else {
-        tb = tb_find_pc(env->mem_io_pc);
-        cpu_restore_state(tb, env, env->mem_io_pc);
+        cpu_restore_state(env, env->mem_io_pc);
 
         apic_handle_tpr_access_report(env->apic_state, env->eip, access);
     }
@@ -1215,6 +1260,8 @@ int cpu_x86_get_descr_debug(CPUX86State *env, unsigned int selector,
                             target_ulong *base, unsigned int *limit,
                             unsigned int *flags)
 {
+    X86CPU *cpu = x86_env_get_cpu(env);
+    CPUState *cs = CPU(cpu);
     SegmentCache *dt;
     target_ulong ptr;
     uint32_t e1, e2;
@@ -1227,8 +1274,8 @@ int cpu_x86_get_descr_debug(CPUX86State *env, unsigned int selector,
     index = selector & ~7;
     ptr = dt->base + index;
     if ((index + 7) > dt->limit
-        || cpu_memory_rw_debug(env, ptr, (uint8_t *)&e1, sizeof(e1), 0) != 0
-        || cpu_memory_rw_debug(env, ptr+4, (uint8_t *)&e2, sizeof(e2), 0) != 0)
+        || cpu_memory_rw_debug(cs, ptr, (uint8_t *)&e1, sizeof(e1), 0) != 0
+        || cpu_memory_rw_debug(cs, ptr+4, (uint8_t *)&e2, sizeof(e2), 0) != 0)
         return 0;
 
     *base = ((e1 >> 16) | ((e2 & 0xff) << 16) | (e2 & 0xff000000));
@@ -1240,39 +1287,16 @@ int cpu_x86_get_descr_debug(CPUX86State *env, unsigned int selector,
     return 1;
 }
 
-X86CPU *cpu_x86_init(const char *cpu_model)
-{
-    X86CPU *cpu;
-    CPUX86State *env;
-    Error *error = NULL;
-
-    cpu = X86_CPU(object_new(TYPE_X86_CPU));
-    env = &cpu->env;
-    env->cpu_model_str = cpu_model;
-
-    if (cpu_x86_register(cpu, cpu_model) < 0) {
-        object_delete(OBJECT(cpu));
-        return NULL;
-    }
-
-    x86_cpu_realize(OBJECT(cpu), &error);
-    if (error) {
-        error_free(error);
-        object_delete(OBJECT(cpu));
-        return NULL;
-    }
-    return cpu;
-}
-
 #if !defined(CONFIG_USER_ONLY)
 void do_cpu_init(X86CPU *cpu)
 {
+    CPUState *cs = CPU(cpu);
     CPUX86State *env = &cpu->env;
-    int sipi = env->interrupt_request & CPU_INTERRUPT_SIPI;
+    int sipi = cs->interrupt_request & CPU_INTERRUPT_SIPI;
     uint64_t pat = env->pat;
 
-    cpu_reset(CPU(cpu));
-    env->interrupt_request = sipi;
+    cpu_reset(cs);
+    cs->interrupt_request = sipi;
     env->pat = pat;
     apic_init_reset(env->apic_state);
 }

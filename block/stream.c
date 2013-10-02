@@ -12,8 +12,8 @@
  */
 
 #include "trace.h"
-#include "block_int.h"
-#include "blockjob.h"
+#include "block/block_int.h"
+#include "block/blockjob.h"
 #include "qemu/ratelimit.h"
 
 enum {
@@ -108,7 +108,7 @@ static void coroutine_fn stream_run(void *opaque)
 
 wait:
         /* Note that even when no rate limit is applied we need to yield
-         * with no pending I/O here so that qemu_aio_flush() returns.
+         * with no pending I/O here so that bdrv_drain_all() returns.
          */
         block_job_sleep_ns(&s->common, rt_clock, delay_ns);
         if (block_job_is_cancelled(&s->common)) {
@@ -198,7 +198,7 @@ static void stream_set_speed(BlockJob *job, int64_t speed, Error **errp)
     ratelimit_set_speed(&s->limit, speed / BDRV_SECTOR_SIZE, SLICE_TIME);
 }
 
-static BlockJobType stream_job_type = {
+static const BlockJobType stream_job_type = {
     .instance_size = sizeof(StreamBlockJob),
     .job_type      = "stream",
     .set_speed     = stream_set_speed,

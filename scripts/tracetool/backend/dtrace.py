@@ -16,6 +16,9 @@ __email__      = "stefanha@linux.vnet.ibm.com"
 from tracetool import out
 
 
+PUBLIC = True
+
+
 PROBEPREFIX = None
 
 def _probeprefix():
@@ -37,7 +40,7 @@ def c(events):
 
 
 def h(events):
-    out('#include "trace-dtrace.h"',
+    out('#include "trace/generated-tracers-dtrace.h"',
         '')
 
     for e in events:

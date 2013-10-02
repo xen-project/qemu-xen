@@ -22,7 +22,16 @@
 
 #include "cpu.h"
 #include "qemu-common.h"
+#include "hw/qdev-properties.h"
+#include "migration/vmstate.h"
 
+
+static void mb_cpu_set_pc(CPUState *cs, vaddr value)
+{
+    MicroBlazeCPU *cpu = MICROBLAZE_CPU(cs);
+
+    cpu->env.sregs[SR_PC] = value;
+}
 
 /* CPUClass::reset() */
 static void mb_cpu_reset(CPUState *s)
@@ -30,11 +39,6 @@ static void mb_cpu_reset(CPUState *s)
     MicroBlazeCPU *cpu = MICROBLAZE_CPU(s);
     MicroBlazeCPUClass *mcc = MICROBLAZE_CPU_GET_CLASS(cpu);
     CPUMBState *env = &cpu->env;
-
-    if (qemu_loglevel_mask(CPU_LOG_RESET)) {
-        qemu_log("CPU Reset (CPU %d)\n", env->cpu_index);
-        log_cpu_state(env, 0);
-    }
 
     mcc->parent_reset(s);
 
@@ -84,23 +88,69 @@ static void mb_cpu_reset(CPUState *s)
 #endif
 }
 
+static void mb_cpu_realizefn(DeviceState *dev, Error **errp)
+{
+    CPUState *cs = CPU(dev);
+    MicroBlazeCPUClass *mcc = MICROBLAZE_CPU_GET_CLASS(dev);
+
+    cpu_reset(cs);
+    qemu_init_vcpu(cs);
+
+    mcc->parent_realize(dev, errp);
+}
+
 static void mb_cpu_initfn(Object *obj)
 {
+    CPUState *cs = CPU(obj);
     MicroBlazeCPU *cpu = MICROBLAZE_CPU(obj);
     CPUMBState *env = &cpu->env;
+    static bool tcg_initialized;
 
+    cs->env_ptr = env;
     cpu_exec_init(env);
 
     set_float_rounding_mode(float_round_nearest_even, &env->fp_status);
+
+    if (tcg_enabled() && !tcg_initialized) {
+        tcg_initialized = true;
+        mb_tcg_init();
+    }
 }
+
+static const VMStateDescription vmstate_mb_cpu = {
+    .name = "cpu",
+    .unmigratable = 1,
+};
+
+static Property mb_properties[] = {
+    DEFINE_PROP_UINT32("xlnx.base-vectors", MicroBlazeCPU, base_vectors, 0),
+    DEFINE_PROP_END_OF_LIST(),
+};
 
 static void mb_cpu_class_init(ObjectClass *oc, void *data)
 {
+    DeviceClass *dc = DEVICE_CLASS(oc);
     CPUClass *cc = CPU_CLASS(oc);
     MicroBlazeCPUClass *mcc = MICROBLAZE_CPU_CLASS(oc);
 
+    mcc->parent_realize = dc->realize;
+    dc->realize = mb_cpu_realizefn;
+
     mcc->parent_reset = cc->reset;
     cc->reset = mb_cpu_reset;
+
+    cc->do_interrupt = mb_cpu_do_interrupt;
+    cc->dump_state = mb_cpu_dump_state;
+    cc->set_pc = mb_cpu_set_pc;
+    cc->gdb_read_register = mb_cpu_gdb_read_register;
+    cc->gdb_write_register = mb_cpu_gdb_write_register;
+#ifndef CONFIG_USER_ONLY
+    cc->do_unassigned_access = mb_cpu_unassigned_access;
+    cc->get_phys_page_debug = mb_cpu_get_phys_page_debug;
+#endif
+    dc->vmsd = &vmstate_mb_cpu;
+    dc->props = mb_properties;
+    cc->gdb_num_core_regs = 32 + 5;
 }
 
 static const TypeInfo mb_cpu_type_info = {

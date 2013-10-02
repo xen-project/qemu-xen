@@ -26,13 +26,14 @@
  *  distribution); if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "tap.h"
+#include "tap_int.h"
 
 #include "qemu-common.h"
 #include "clients.h"            /* net_init_tap */
-#include "net.h"
-#include "sysemu.h"
-#include "qemu-error.h"
+#include "net/net.h"
+#include "net/tap.h"            /* tap_has_ufo, ... */
+#include "sysemu/sysemu.h"
+#include "qemu/error-report.h"
 #include <stdio.h>
 #include <windows.h>
 #include <winioctl.h>
@@ -565,7 +566,7 @@ static void tap_win32_free_buffer(tap_win32_overlapped_t *overlapped,
 }
 
 static int tap_win32_open(tap_win32_overlapped_t **phandle,
-                          const char *prefered_name)
+                          const char *preferred_name)
 {
     char device_path[256];
     char device_guid[0x100];
@@ -581,8 +582,9 @@ static int tap_win32_open(tap_win32_overlapped_t **phandle,
     DWORD version_len;
     DWORD idThread;
 
-    if (prefered_name != NULL)
-        snprintf(name_buffer, sizeof(name_buffer), "%s", prefered_name);
+    if (preferred_name != NULL) {
+        snprintf(name_buffer, sizeof(name_buffer), "%s", preferred_name);
+    }
 
     rc = get_device_guid(device_guid, sizeof(device_guid), name_buffer, sizeof(name_buffer));
     if (rc)
@@ -720,9 +722,9 @@ int net_init_tap(const NetClientOptions *opts, const char *name,
     return 0;
 }
 
-int tap_has_ufo(NetClientState *nc)
+bool tap_has_ufo(NetClientState *nc)
 {
-    return 0;
+    return false;
 }
 
 int tap_has_vnet_hdr(NetClientState *nc)
@@ -739,7 +741,7 @@ void tap_fd_set_vnet_hdr_len(int fd, int len)
 {
 }
 
-void tap_using_vnet_hdr(NetClientState *nc, int using_vnet_hdr)
+void tap_using_vnet_hdr(NetClientState *nc, bool using_vnet_hdr)
 {
 }
 
@@ -760,5 +762,15 @@ int tap_has_vnet_hdr_len(NetClientState *nc, int len)
 
 void tap_set_vnet_hdr_len(NetClientState *nc, int len)
 {
-    assert(0);
+    abort();
+}
+
+int tap_enable(NetClientState *nc)
+{
+    abort();
+}
+
+int tap_disable(NetClientState *nc)
+{
+    abort();
 }

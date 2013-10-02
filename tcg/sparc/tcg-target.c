@@ -776,6 +776,7 @@ static void tcg_out_setcond2_i32(TCGContext *s, TCGCond cond, TCGArg ret,
         break;
     }
 }
+#endif
 
 static void tcg_out_addsub2(TCGContext *s, TCGArg rl, TCGArg rh,
                             TCGArg al, TCGArg ah, TCGArg bl, int blconst,
@@ -792,7 +793,6 @@ static void tcg_out_addsub2(TCGContext *s, TCGArg rl, TCGArg rh,
     tcg_out_arithc(s, rh, ah, bh, bhconst, oph);
     tcg_out_mov(s, TCG_TYPE_I32, rl, tmp);
 }
-#endif
 
 /* Generate global QEMU prologue and epilogue code */
 static void tcg_target_qemu_prologue(TCGContext *s)
@@ -831,7 +831,7 @@ static void tcg_target_qemu_prologue(TCGContext *s)
 
 #if defined(CONFIG_SOFTMMU)
 
-#include "../../softmmu_defs.h"
+#include "exec/softmmu_defs.h"
 
 /* helper signature: helper_ld_mmu(CPUState *env, target_ulong addr,
    int mmu_idx) */
@@ -1327,6 +1327,8 @@ static inline void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args,
                              args[3], const_args[3],
                              args[4], const_args[4]);
         break;
+#endif
+
     case INDEX_op_add2_i32:
         tcg_out_addsub2(s, args[0], args[1], args[2], args[3],
                         args[4], const_args[4], args[5], const_args[5],
@@ -1342,7 +1344,6 @@ static inline void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args,
                        ARITH_UMUL);
         tcg_out_rdy(s, args[1]);
         break;
-#endif
 
     case INDEX_op_qemu_ld8u:
         tcg_out_qemu_ld(s, args, 0);
@@ -1511,10 +1512,11 @@ static const TCGTargetOpDef sparc_op_defs[] = {
 #if TCG_TARGET_REG_BITS == 32
     { INDEX_op_brcond2_i32, { "rZ", "rZ", "rJ", "rJ" } },
     { INDEX_op_setcond2_i32, { "r", "rZ", "rZ", "rJ", "rJ" } },
+#endif
+
     { INDEX_op_add2_i32, { "r", "r", "rZ", "rZ", "rJ", "rJ" } },
     { INDEX_op_sub2_i32, { "r", "r", "rZ", "rZ", "rJ", "rJ" } },
     { INDEX_op_mulu2_i32, { "r", "r", "rZ", "rJ" } },
-#endif
 
 #if TCG_TARGET_REG_BITS == 64
     { INDEX_op_mov_i64, { "r", "r" } },
@@ -1645,28 +1647,11 @@ static void tcg_target_init(TCGContext *s)
 #endif
 
 typedef struct {
-    uint32_t len __attribute__((aligned((sizeof(void *)))));
-    uint32_t id;
-    uint8_t version;
-    char augmentation[1];
-    uint8_t code_align;
-    uint8_t data_align;
-    uint8_t return_column;
-} DebugFrameCIE;
-
-typedef struct {
-    uint32_t len __attribute__((aligned((sizeof(void *)))));
-    uint32_t cie_offset;
-    tcg_target_long func_start __attribute__((packed));
-    tcg_target_long func_len __attribute__((packed));
-    uint8_t def_cfa[TCG_TARGET_REG_BITS == 64 ? 4 : 2];
-    uint8_t win_save;
-    uint8_t ret_save[3];
-} DebugFrameFDE;
-
-typedef struct {
     DebugFrameCIE cie;
-    DebugFrameFDE fde;
+    DebugFrameFDEHeader fde;
+    uint8_t fde_def_cfa[TCG_TARGET_REG_BITS == 64 ? 4 : 2];
+    uint8_t fde_win_save;
+    uint8_t fde_ret_save[3];
 } DebugFrame;
 
 static DebugFrame debug_frame = {
@@ -1677,8 +1662,10 @@ static DebugFrame debug_frame = {
     .cie.data_align = -sizeof(void *) & 0x7f,
     .cie.return_column = 15,            /* o7 */
 
-    .fde.len = sizeof(DebugFrameFDE)-4, /* length after .len member */
-    .fde.def_cfa = {
+    /* Total FDE size does not include the "len" member.  */
+    .fde.len = sizeof(DebugFrame) - offsetof(DebugFrame, fde.cie_offset),
+
+    .fde_def_cfa = {
 #if TCG_TARGET_REG_BITS == 64
         12, 30,                         /* DW_CFA_def_cfa i6, 2047 */
         (2047 & 0x7f) | 0x80, (2047 >> 7)
@@ -1686,8 +1673,8 @@ static DebugFrame debug_frame = {
         13, 30                          /* DW_CFA_def_cfa_register i6 */
 #endif
     },
-    .fde.win_save = 0x2d,               /* DW_CFA_GNU_window_save */
-    .fde.ret_save = { 9, 15, 31 },      /* DW_CFA_register o7, i7 */
+    .fde_win_save = 0x2d,               /* DW_CFA_GNU_window_save */
+    .fde_ret_save = { 9, 15, 31 },      /* DW_CFA_register o7, i7 */
 };
 
 void tcg_register_jit(void *buf, size_t buf_size)

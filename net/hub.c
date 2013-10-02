@@ -12,11 +12,11 @@
  *
  */
 
-#include "monitor.h"
-#include "net.h"
+#include "monitor/monitor.h"
+#include "net/net.h"
 #include "clients.h"
 #include "hub.h"
-#include "iov.h"
+#include "qemu/iov.h"
 
 /*
  * A hub broadcasts incoming packets to all its ports except the source port.
@@ -256,7 +256,7 @@ void net_hub_info(Monitor *mon)
 /**
  * Get the hub id that a client is connected to
  *
- * @id              Pointer for hub id output, may be NULL
+ * @id: Pointer for hub id output, may be NULL
  */
 int net_hub_id_for_client(NetClientState *nc, int *id)
 {
@@ -337,4 +337,18 @@ void net_hub_check_clients(void)
                     hub->id);
         }
     }
+}
+
+bool net_hub_flush(NetClientState *nc)
+{
+    NetHubPort *port;
+    NetHubPort *source_port = DO_UPCAST(NetHubPort, nc, nc);
+    int ret = 0;
+
+    QLIST_FOREACH(port, &source_port->hub->ports, next) {
+        if (port != source_port) {
+            ret += qemu_net_queue_flush(port->nc.send_queue);
+        }
+    }
+    return ret ? true : false;
 }

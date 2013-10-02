@@ -109,11 +109,13 @@
 
 #define FRAME_TIMER_FREQ 1000
 #define FRAME_TIMER_NS   (1000000000 / FRAME_TIMER_FREQ)
+#define UFRAME_TIMER_NS  (FRAME_TIMER_NS / 8)
 
 #define NB_MAXINTRATE    8        // Max rate at which controller issues ints
 #define BUFF_SIZE        5*4096   // Max bytes to transfer per transaction
 #define MAX_QH           100      // Max allowable queue heads in a chain
-#define MIN_FR_PER_TICK  3        // Min frames to process when catching up
+#define MIN_UFR_PER_TICK 24       /* Min frames to process when catching up */
+#define PERIODIC_ACTIVE  512      /* Micro-frames */
 
 /*  Internal periodic / asynchronous schedule state machine states
  */
@@ -191,6 +193,7 @@ static int ehci_state_executing(EHCIQueue *q);
 static int ehci_state_writeback(EHCIQueue *q);
 static int ehci_state_advqueue(EHCIQueue *q);
 static int ehci_fill_queue(EHCIPacket *p);
+static void ehci_free_packet(EHCIPacket *p);
 
 static const char *nr2str(const char **n, size_t len, uint32_t nr)
 {
@@ -437,6 +440,136 @@ static inline bool ehci_periodic_enabled(EHCIState *s)
     return ehci_enabled(s) && (s->usbcmd & USBCMD_PSE);
 }
 
+/* Get an array of dwords from main memory */
+static inline int get_dwords(EHCIState *ehci, uint32_t addr,
+                             uint32_t *buf, int num)
+{
+    int i;
+
+    if (!ehci->as) {
+        ehci_raise_irq(ehci, USBSTS_HSE);
+        ehci->usbcmd &= ~USBCMD_RUNSTOP;
+        trace_usb_ehci_dma_error();
+        return -1;
+    }
+
+    for (i = 0; i < num; i++, buf++, addr += sizeof(*buf)) {
+        dma_memory_read(ehci->as, addr, buf, sizeof(*buf));
+        *buf = le32_to_cpu(*buf);
+    }
+
+    return num;
+}
+
+/* Put an array of dwords in to main memory */
+static inline int put_dwords(EHCIState *ehci, uint32_t addr,
+                             uint32_t *buf, int num)
+{
+    int i;
+
+    if (!ehci->as) {
+        ehci_raise_irq(ehci, USBSTS_HSE);
+        ehci->usbcmd &= ~USBCMD_RUNSTOP;
+        trace_usb_ehci_dma_error();
+        return -1;
+    }
+
+    for (i = 0; i < num; i++, buf++, addr += sizeof(*buf)) {
+        uint32_t tmp = cpu_to_le32(*buf);
+        dma_memory_write(ehci->as, addr, &tmp, sizeof(tmp));
+    }
+
+    return num;
+}
+
+static int ehci_get_pid(EHCIqtd *qtd)
+{
+    switch (get_field(qtd->token, QTD_TOKEN_PID)) {
+    case 0:
+        return USB_TOKEN_OUT;
+    case 1:
+        return USB_TOKEN_IN;
+    case 2:
+        return USB_TOKEN_SETUP;
+    default:
+        fprintf(stderr, "bad token\n");
+        return 0;
+    }
+}
+
+static bool ehci_verify_qh(EHCIQueue *q, EHCIqh *qh)
+{
+    uint32_t devaddr = get_field(qh->epchar, QH_EPCHAR_DEVADDR);
+    uint32_t endp    = get_field(qh->epchar, QH_EPCHAR_EP);
+    if ((devaddr != get_field(q->qh.epchar, QH_EPCHAR_DEVADDR)) ||
+        (endp    != get_field(q->qh.epchar, QH_EPCHAR_EP)) ||
+        (qh->current_qtd != q->qh.current_qtd) ||
+        (q->async && qh->next_qtd != q->qh.next_qtd) ||
+        (memcmp(&qh->altnext_qtd, &q->qh.altnext_qtd,
+                                 7 * sizeof(uint32_t)) != 0) ||
+        (q->dev != NULL && q->dev->addr != devaddr)) {
+        return false;
+    } else {
+        return true;
+    }
+}
+
+static bool ehci_verify_qtd(EHCIPacket *p, EHCIqtd *qtd)
+{
+    if (p->qtdaddr != p->queue->qtdaddr ||
+        (p->queue->async && !NLPTR_TBIT(p->qtd.next) &&
+            (p->qtd.next != qtd->next)) ||
+        (!NLPTR_TBIT(p->qtd.altnext) && (p->qtd.altnext != qtd->altnext)) ||
+        p->qtd.token != qtd->token ||
+        p->qtd.bufptr[0] != qtd->bufptr[0]) {
+        return false;
+    } else {
+        return true;
+    }
+}
+
+static bool ehci_verify_pid(EHCIQueue *q, EHCIqtd *qtd)
+{
+    int ep  = get_field(q->qh.epchar, QH_EPCHAR_EP);
+    int pid = ehci_get_pid(qtd);
+
+    /* Note the pid changing is normal for ep 0 (the control ep) */
+    if (q->last_pid && ep != 0 && pid != q->last_pid) {
+        return false;
+    } else {
+        return true;
+    }
+}
+
+/* Finish executing and writeback a packet outside of the regular
+   fetchqh -> fetchqtd -> execute -> writeback cycle */
+static void ehci_writeback_async_complete_packet(EHCIPacket *p)
+{
+    EHCIQueue *q = p->queue;
+    EHCIqtd qtd;
+    EHCIqh qh;
+    int state;
+
+    /* Verify the qh + qtd, like we do when going through fetchqh & fetchqtd */
+    get_dwords(q->ehci, NLPTR_GET(q->qhaddr),
+               (uint32_t *) &qh, sizeof(EHCIqh) >> 2);
+    get_dwords(q->ehci, NLPTR_GET(q->qtdaddr),
+               (uint32_t *) &qtd, sizeof(EHCIqtd) >> 2);
+    if (!ehci_verify_qh(q, &qh) || !ehci_verify_qtd(p, &qtd)) {
+        p->async = EHCI_ASYNC_INITIALIZED;
+        ehci_free_packet(p);
+        return;
+    }
+
+    state = ehci_get_state(q->ehci, q->async);
+    ehci_state_executing(q);
+    ehci_state_writeback(q); /* Frees the packet! */
+    if (!(q->qh.token & QTD_TOKEN_HALT)) {
+        ehci_state_advqueue(q);
+    }
+    ehci_set_state(q->ehci, q->async, state);
+}
+
 /* packet management */
 
 static EHCIPacket *ehci_alloc_packet(EHCIQueue *q)
@@ -453,27 +586,23 @@ static EHCIPacket *ehci_alloc_packet(EHCIQueue *q)
 
 static void ehci_free_packet(EHCIPacket *p)
 {
-    if (p->async == EHCI_ASYNC_FINISHED) {
-        EHCIQueue *q = p->queue;
-        int state = ehci_get_state(q->ehci, q->async);
-        /* This is a normal, but rare condition (cancel racing completion) */
-        fprintf(stderr, "EHCI: Warning packet completed but not processed\n");
-        ehci_state_executing(q);
-        ehci_state_writeback(q);
-        if (!(q->qh.token & QTD_TOKEN_HALT)) {
-            ehci_state_advqueue(q);
-        }
-        ehci_set_state(q->ehci, q->async, state);
-        /* state_writeback recurses into us with async == EHCI_ASYNC_NONE!! */
+    if (p->async == EHCI_ASYNC_FINISHED &&
+            !(p->queue->qh.token & QTD_TOKEN_HALT)) {
+        ehci_writeback_async_complete_packet(p);
         return;
     }
     trace_usb_ehci_packet_action(p->queue, p, "free");
-    if (p->async == EHCI_ASYNC_INITIALIZED) {
-        usb_packet_unmap(&p->packet, &p->sgl);
-        qemu_sglist_destroy(&p->sgl);
-    }
     if (p->async == EHCI_ASYNC_INFLIGHT) {
         usb_cancel_packet(&p->packet);
+    }
+    if (p->async == EHCI_ASYNC_FINISHED &&
+            p->packet.status == USB_RET_SUCCESS) {
+        fprintf(stderr,
+                "EHCI: Dropping completed packet from halted %s ep %02X\n",
+                (p->pid == USB_TOKEN_IN) ? "in" : "out",
+                get_field(p->queue->qh.epchar, QH_EPCHAR_EP));
+    }
+    if (p->async != EHCI_ASYNC_NONE) {
         usb_packet_unmap(&p->packet, &p->sgl);
         qemu_sglist_destroy(&p->sgl);
     }
@@ -499,6 +628,17 @@ static EHCIQueue *ehci_alloc_queue(EHCIState *ehci, uint32_t addr, int async)
     return q;
 }
 
+static void ehci_queue_stopped(EHCIQueue *q)
+{
+    int endp  = get_field(q->qh.epchar, QH_EPCHAR_EP);
+
+    if (!q->last_pid || !q->dev) {
+        return;
+    }
+
+    usb_device_ep_stopped(q->dev, usb_ep_get(q->dev, q->last_pid, endp));
+}
+
 static int ehci_cancel_queue(EHCIQueue *q)
 {
     EHCIPacket *p;
@@ -506,7 +646,7 @@ static int ehci_cancel_queue(EHCIQueue *q)
 
     p = QTAILQ_FIRST(&q->packets);
     if (p == NULL) {
-        return 0;
+        goto leave;
     }
 
     trace_usb_ehci_queue_action(q, "cancel");
@@ -514,6 +654,9 @@ static int ehci_cancel_queue(EHCIQueue *q)
         ehci_free_packet(p);
         packets++;
     } while ((p = QTAILQ_FIRST(&q->packets)) != NULL);
+
+leave:
+    ehci_queue_stopped(q);
     return packets;
 }
 
@@ -525,6 +668,7 @@ static int ehci_reset_queue(EHCIQueue *q)
     packets = ehci_cancel_queue(q);
     q->dev = NULL;
     q->qtdaddr = 0;
+    q->last_pid = 0;
     return packets;
 }
 
@@ -633,7 +777,6 @@ static void ehci_attach(USBPort *port)
     *portsc |= PORTSC_CSC;
 
     ehci_raise_irq(s, USBSTS_PCD);
-    ehci_commit_irq(s);
 }
 
 static void ehci_detach(USBPort *port)
@@ -663,7 +806,6 @@ static void ehci_detach(USBPort *port)
     *portsc |= PORTSC_CSC;
 
     ehci_raise_irq(s, USBSTS_PCD);
-    ehci_commit_irq(s);
 }
 
 static void ehci_child_detach(USBPort *port, USBDevice *child)
@@ -736,6 +878,20 @@ static int ehci_register_companion(USBBus *bus, USBPort *ports[],
     s->caps[0x05] = (s->companion_count << 4) | portcount;
 
     return 0;
+}
+
+static void ehci_wakeup_endpoint(USBBus *bus, USBEndpoint *ep,
+                                 unsigned int stream)
+{
+    EHCIState *s = container_of(bus, EHCIState, bus);
+    uint32_t portsc = s->portsc[ep->dev->port->index];
+
+    if (portsc & PORTSC_POWNER) {
+        return;
+    }
+
+    s->periodic_sched_active = PERIODIC_ACTIVE;
+    qemu_bh_schedule(s->async_bh);
 }
 
 static USBDevice *ehci_find_device(EHCIState *ehci, uint8_t addr)
@@ -819,7 +975,15 @@ static uint64_t ehci_opreg_read(void *ptr, hwaddr addr,
     EHCIState *s = ptr;
     uint32_t val;
 
-    val = s->opreg[addr >> 2];
+    switch (addr) {
+    case FRINDEX:
+        /* Round down to mult of 8, else it can go backwards on migration */
+        val = s->frindex & ~7;
+        break;
+    default:
+        val = s->opreg[addr >> 2];
+    }
+
     trace_usb_ehci_opreg_read(addr + s->opregbase, addr2str(addr), val);
     return val;
 }
@@ -831,7 +995,7 @@ static uint64_t ehci_port_read(void *ptr, hwaddr addr,
     uint32_t val;
 
     val = s->portsc[addr >> 2];
-    trace_usb_ehci_portsc_read(addr + PORTSC_BEGIN, addr >> 2, val);
+    trace_usb_ehci_portsc_read(addr + s->portscbase, addr >> 2, val);
     return val;
 }
 
@@ -872,7 +1036,7 @@ static void ehci_port_write(void *ptr, hwaddr addr,
     uint32_t old = *portsc;
     USBDevice *dev = s->ports[port].dev;
 
-    trace_usb_ehci_portsc_write(addr + PORTSC_BEGIN, addr >> 2, val);
+    trace_usb_ehci_portsc_write(addr + s->portscbase, addr >> 2, val);
 
     /* Clear rwc bits */
     *portsc &= ~(val & PORTSC_RWC_MASK);
@@ -905,7 +1069,7 @@ static void ehci_port_write(void *ptr, hwaddr addr,
 
     *portsc &= ~PORTSC_RO_MASK;
     *portsc |= val;
-    trace_usb_ehci_portsc_change(addr + PORTSC_BEGIN, addr >> 2, *portsc, old);
+    trace_usb_ehci_portsc_change(addr + s->portscbase, addr >> 2, *portsc, old);
 }
 
 static void ehci_opreg_write(void *ptr, hwaddr addr,
@@ -970,7 +1134,8 @@ static void ehci_opreg_write(void *ptr, hwaddr addr,
         break;
 
     case FRINDEX:
-        val &= 0x00003ff8; /* frindex is 14bits and always a multiple of 8 */
+        val &= 0x00003fff; /* frindex is 14bits */
+        s->usbsts_frindex = val;
         break;
 
     case CONFIGFLAG:
@@ -1001,48 +1166,6 @@ static void ehci_opreg_write(void *ptr, hwaddr addr,
     *mmio = val;
     trace_usb_ehci_opreg_change(addr + s->opregbase, addr2str(addr),
                                 *mmio, old);
-}
-
-/* Get an array of dwords from main memory */
-static inline int get_dwords(EHCIState *ehci, uint32_t addr,
-                             uint32_t *buf, int num)
-{
-    int i;
-
-    if (!ehci->dma) {
-        ehci_raise_irq(ehci, USBSTS_HSE);
-        ehci->usbcmd &= ~USBCMD_RUNSTOP;
-        trace_usb_ehci_dma_error();
-        return -1;
-    }
-
-    for(i = 0; i < num; i++, buf++, addr += sizeof(*buf)) {
-        dma_memory_read(ehci->dma, addr, buf, sizeof(*buf));
-        *buf = le32_to_cpu(*buf);
-    }
-
-    return num;
-}
-
-/* Put an array of dwords in to main memory */
-static inline int put_dwords(EHCIState *ehci, uint32_t addr,
-                             uint32_t *buf, int num)
-{
-    int i;
-
-    if (!ehci->dma) {
-        ehci_raise_irq(ehci, USBSTS_HSE);
-        ehci->usbcmd &= ~USBCMD_RUNSTOP;
-        trace_usb_ehci_dma_error();
-        return -1;
-    }
-
-    for(i = 0; i < num; i++, buf++, addr += sizeof(*buf)) {
-        uint32_t tmp = cpu_to_le32(*buf);
-        dma_memory_write(ehci->dma, addr, &tmp, sizeof(tmp));
-    }
-
-    return num;
 }
 
 /*
@@ -1118,11 +1241,13 @@ static int ehci_init_transfer(EHCIPacket *p)
 {
     uint32_t cpage, offset, bytes, plen;
     dma_addr_t page;
+    USBBus *bus = &p->queue->ehci->bus;
+    BusState *qbus = BUS(bus);
 
     cpage  = get_field(p->qtd.token, QTD_TOKEN_CPAGE);
     bytes  = get_field(p->qtd.token, QTD_TOKEN_TBYTES);
     offset = p->qtd.bufptr[0] & ~QTD_BUFPTR_MASK;
-    qemu_sglist_init(&p->sgl, 5, p->queue->ehci->dma);
+    qemu_sglist_init(&p->sgl, qbus->parent, 5, p->queue->ehci->as);
 
     while (bytes > 0) {
         if (cpage > 4) {
@@ -1188,9 +1313,10 @@ static void ehci_async_complete_packet(USBPort *port, USBPacket *packet)
     trace_usb_ehci_packet_action(p->queue, p, "wakeup");
     p->async = EHCI_ASYNC_FINISHED;
 
-    if (p->queue->async) {
-        qemu_bh_schedule(p->queue->ehci->async_bh);
+    if (!p->queue->async) {
+        s->periodic_sched_active = PERIODIC_ACTIVE;
     }
+    qemu_bh_schedule(s->async_bh);
 }
 
 static void ehci_execute_complete(EHCIQueue *q)
@@ -1231,7 +1357,7 @@ static void ehci_execute_complete(EHCIQueue *q)
     default:
         /* should not be triggerable */
         fprintf(stderr, "USB invalid response %d\n", p->packet.status);
-        assert(0);
+        g_assert_not_reached();
         break;
     }
 
@@ -1242,6 +1368,9 @@ static void ehci_execute_complete(EHCIQueue *q)
         if (tbytes) {
             /* 4.15.1.2 must raise int on a short input packet */
             ehci_raise_irq(q->ehci, USBSTS_INT);
+            if (q->async) {
+                q->ehci->int_req_by_async = true;
+            }
         }
     } else {
         tbytes = 0;
@@ -1286,22 +1415,11 @@ static int ehci_execute(EHCIPacket *p, const char *action)
         return -1;
     }
 
-    p->pid = (p->qtd.token & QTD_TOKEN_PID_MASK) >> QTD_TOKEN_PID_SH;
-    switch (p->pid) {
-    case 0:
-        p->pid = USB_TOKEN_OUT;
-        break;
-    case 1:
-        p->pid = USB_TOKEN_IN;
-        break;
-    case 2:
-        p->pid = USB_TOKEN_SETUP;
-        break;
-    default:
-        fprintf(stderr, "bad token\n");
-        break;
+    if (!ehci_verify_pid(p->queue, &p->qtd)) {
+        ehci_queue_stopped(p->queue); /* Mark the ep in the prev dir stopped */
     }
-
+    p->pid = ehci_get_pid(&p->qtd);
+    p->queue->last_pid = p->pid;
     endp = get_field(p->queue->qh.epchar, QH_EPCHAR_EP);
     ep = usb_ep_get(p->queue->dev, p->pid, endp);
 
@@ -1311,7 +1429,7 @@ static int ehci_execute(EHCIPacket *p, const char *action)
         }
 
         spd = (p->pid == USB_TOKEN_IN && NLPTR_TBIT(p->qtd.altnext) == 0);
-        usb_packet_setup(&p->packet, p->pid, ep, p->qtdaddr, spd,
+        usb_packet_setup(&p->packet, p->pid, ep, 0, p->qtdaddr, spd,
                          (p->qtd.token & QTD_TOKEN_IOC) != 0);
         usb_packet_map(&p->packet, &p->sgl);
         p->async = EHCI_ASYNC_INITIALIZED;
@@ -1344,6 +1462,8 @@ static int ehci_process_itd(EHCIState *ehci,
     uint32_t i, len, pid, dir, devaddr, endp;
     uint32_t pg, off, ptr1, ptr2, max, mult;
 
+    ehci->periodic_sched_active = PERIODIC_ACTIVE;
+
     dir =(itd->bufptr[1] & ITD_BUFPTR_DIRECTION);
     devaddr = get_field(itd->bufptr[0], ITD_BUFPTR_DEVADDR);
     endp = get_field(itd->bufptr[0], ITD_BUFPTR_EP);
@@ -1366,7 +1486,7 @@ static int ehci_process_itd(EHCIState *ehci,
                 return -1;
             }
 
-            qemu_sglist_init(&ehci->isgl, 2, ehci->dma);
+            qemu_sglist_init(&ehci->isgl, DEVICE(ehci), 2, ehci->as);
             if (off + len > 4096) {
                 /* transfer crosses page border */
                 uint32_t len2 = off + len - 4096;
@@ -1382,7 +1502,7 @@ static int ehci_process_itd(EHCIState *ehci,
             dev = ehci_find_device(ehci, devaddr);
             ep = usb_ep_get(dev, pid, endp);
             if (ep && ep->type == USB_ENDPOINT_XFER_ISOC) {
-                usb_packet_setup(&ehci->ipacket, pid, ep, addr, false,
+                usb_packet_setup(&ehci->ipacket, pid, ep, 0, addr, false,
                                  (itd->transact[i] & ITD_XACT_IOC) != 0);
                 usb_packet_map(&ehci->ipacket, &ehci->isgl);
                 usb_handle_packet(dev, &ehci->ipacket);
@@ -1534,8 +1654,7 @@ out:
 
 static EHCIQueue *ehci_state_fetchqh(EHCIState *ehci, int async)
 {
-    EHCIPacket *p;
-    uint32_t entry, devaddr, endp;
+    uint32_t entry;
     EHCIQueue *q;
     EHCIqh qh;
 
@@ -1544,7 +1663,6 @@ static EHCIQueue *ehci_state_fetchqh(EHCIState *ehci, int async)
     if (NULL == q) {
         q = ehci_alloc_queue(ehci, entry, async);
     }
-    p = QTAILQ_FIRST(&q->packets);
 
     q->seen++;
     if (q->seen > 1) {
@@ -1565,19 +1683,10 @@ static EHCIQueue *ehci_state_fetchqh(EHCIState *ehci, int async)
      * The overlay area of the qh should never be changed by the guest,
      * except when idle, in which case the reset is a nop.
      */
-    devaddr = get_field(qh.epchar, QH_EPCHAR_DEVADDR);
-    endp    = get_field(qh.epchar, QH_EPCHAR_EP);
-    if ((devaddr != get_field(q->qh.epchar, QH_EPCHAR_DEVADDR)) ||
-        (endp    != get_field(q->qh.epchar, QH_EPCHAR_EP)) ||
-        (qh.current_qtd != q->qh.current_qtd) ||
-        (q->async && qh.next_qtd != q->qh.next_qtd) ||
-        (memcmp(&qh.altnext_qtd, &q->qh.altnext_qtd,
-                                 7 * sizeof(uint32_t)) != 0) ||
-        (q->dev != NULL && q->dev->addr != devaddr)) {
+    if (!ehci_verify_qh(q, &qh)) {
         if (ehci_reset_queue(q) > 0) {
             ehci_trace_guest_bug(ehci, "guest updated active QH");
         }
-        p = NULL;
     }
     q->qh = qh;
 
@@ -1587,14 +1696,8 @@ static EHCIQueue *ehci_state_fetchqh(EHCIState *ehci, int async)
     }
 
     if (q->dev == NULL) {
-        q->dev = ehci_find_device(q->ehci, devaddr);
-    }
-
-    if (p && p->async == EHCI_ASYNC_FINISHED) {
-        /* I/O finished -- continue processing queue */
-        trace_usb_ehci_packet_action(p->queue, p, "complete");
-        ehci_set_state(ehci, async, EST_EXECUTING);
-        goto out;
+        q->dev = ehci_find_device(q->ehci,
+                                  get_field(q->qh.epchar, QH_EPCHAR_DEVADDR));
     }
 
     if (async && (q->qh.epchar & QH_EPCHAR_H)) {
@@ -1745,13 +1848,11 @@ static int ehci_state_fetchqtd(EHCIQueue *q)
 
     p = QTAILQ_FIRST(&q->packets);
     if (p != NULL) {
-        if (p->qtdaddr != q->qtdaddr ||
-            (q->async && !NLPTR_TBIT(p->qtd.next) &&
-                (p->qtd.next != qtd.next)) ||
-            (!NLPTR_TBIT(p->qtd.altnext) && (p->qtd.altnext != qtd.altnext)) ||
-            p->qtd.bufptr[0] != qtd.bufptr[0]) {
+        if (!ehci_verify_qtd(p, &qtd)) {
             ehci_cancel_queue(q);
-            ehci_trace_guest_bug(q->ehci, "guest updated active QH or qTD");
+            if (qtd.token & QTD_TOKEN_ACTIVE) {
+                ehci_trace_guest_bug(q->ehci, "guest updated active qTD");
+            }
             p = NULL;
         } else {
             p->qtd = qtd;
@@ -1760,11 +1861,6 @@ static int ehci_state_fetchqtd(EHCIQueue *q)
     }
 
     if (!(qtd.token & QTD_TOKEN_ACTIVE)) {
-        if (p != NULL) {
-            /* transfer canceled by guest (clear active) */
-            ehci_cancel_queue(q);
-            p = NULL;
-        }
         ehci_set_state(q->ehci, q->async, EST_HORIZONTALQH);
     } else if (p != NULL) {
         switch (p->async) {
@@ -1780,10 +1876,7 @@ static int ehci_state_fetchqtd(EHCIQueue *q)
             ehci_set_state(q->ehci, q->async, EST_HORIZONTALQH);
             break;
         case EHCI_ASYNC_FINISHED:
-            /*
-             * We get here when advqueue moves to a packet which is already
-             * finished, which can happen with packets queued up by fill_queue
-             */
+            /* Complete executing of the packet */
             ehci_set_state(q->ehci, q->async, EST_EXECUTING);
             break;
         }
@@ -1840,6 +1933,10 @@ static int ehci_fill_queue(EHCIPacket *p)
         }
         ehci_trace_qtd(q, NLPTR_GET(qtdaddr), &qtd);
         if (!(qtd.token & QTD_TOKEN_ACTIVE)) {
+            break;
+        }
+        if (!ehci_verify_pid(q, &qtd)) {
+            ehci_trace_guest_bug(q->ehci, "guest queued token with wrong pid");
             break;
         }
         p = ehci_alloc_packet(q);
@@ -2004,18 +2101,22 @@ static void ehci_advance_state(EHCIState *ehci, int async)
             break;
 
         case EST_ADVANCEQUEUE:
+            assert(q != NULL);
             again = ehci_state_advqueue(q);
             break;
 
         case EST_FETCHQTD:
+            assert(q != NULL);
             again = ehci_state_fetchqtd(q);
             break;
 
         case EST_HORIZONTALQH:
+            assert(q != NULL);
             again = ehci_state_horizqh(q);
             break;
 
         case EST_EXECUTE:
+            assert(q != NULL);
             again = ehci_state_execute(q);
             if (async) {
                 ehci->async_stepdown = 0;
@@ -2033,12 +2134,15 @@ static void ehci_advance_state(EHCIState *ehci, int async)
         case EST_WRITEBACK:
             assert(q != NULL);
             again = ehci_state_writeback(q);
+            if (!async) {
+                ehci->periodic_sched_active = PERIODIC_ACTIVE;
+            }
             break;
 
         default:
             fprintf(stderr, "Bad state!\n");
             again = -1;
-            assert(0);
+            g_assert_not_reached();
             break;
         }
 
@@ -2102,7 +2206,7 @@ static void ehci_advance_async_state(EHCIState *ehci)
         /* this should only be due to a developer mistake */
         fprintf(stderr, "ehci: Bad asynchronous state %d. "
                 "Resetting to active\n", ehci->astate);
-        assert(0);
+        g_assert_not_reached();
     }
 }
 
@@ -2152,20 +2256,20 @@ static void ehci_advance_periodic_state(EHCIState *ehci)
         /* this should only be due to a developer mistake */
         fprintf(stderr, "ehci: Bad periodic state %d. "
                 "Resetting to active\n", ehci->pstate);
-        assert(0);
+        g_assert_not_reached();
     }
 }
 
-static void ehci_update_frindex(EHCIState *ehci, int frames)
+static void ehci_update_frindex(EHCIState *ehci, int uframes)
 {
     int i;
 
-    if (!ehci_enabled(ehci)) {
+    if (!ehci_enabled(ehci) && ehci->pstate == EST_INACTIVE) {
         return;
     }
 
-    for (i = 0; i < frames; i++) {
-        ehci->frindex += 8;
+    for (i = 0; i < uframes; i++) {
+        ehci->frindex++;
 
         if (ehci->frindex == 0x00002000) {
             ehci_raise_irq(ehci, USBSTS_FLR);
@@ -2189,49 +2293,57 @@ static void ehci_frame_timer(void *opaque)
     int need_timer = 0;
     int64_t expire_time, t_now;
     uint64_t ns_elapsed;
-    int frames, skipped_frames;
+    int uframes, skipped_uframes;
     int i;
 
     t_now = qemu_get_clock_ns(vm_clock);
     ns_elapsed = t_now - ehci->last_run_ns;
-    frames = ns_elapsed / FRAME_TIMER_NS;
+    uframes = ns_elapsed / UFRAME_TIMER_NS;
 
     if (ehci_periodic_enabled(ehci) || ehci->pstate != EST_INACTIVE) {
         need_timer++;
-        ehci->async_stepdown = 0;
 
-        if (frames > ehci->maxframes) {
-            skipped_frames = frames - ehci->maxframes;
-            ehci_update_frindex(ehci, skipped_frames);
-            ehci->last_run_ns += FRAME_TIMER_NS * skipped_frames;
-            frames -= skipped_frames;
-            DPRINTF("WARNING - EHCI skipped %d frames\n", skipped_frames);
+        if (uframes > (ehci->maxframes * 8)) {
+            skipped_uframes = uframes - (ehci->maxframes * 8);
+            ehci_update_frindex(ehci, skipped_uframes);
+            ehci->last_run_ns += UFRAME_TIMER_NS * skipped_uframes;
+            uframes -= skipped_uframes;
+            DPRINTF("WARNING - EHCI skipped %d uframes\n", skipped_uframes);
         }
 
-        for (i = 0; i < frames; i++) {
+        for (i = 0; i < uframes; i++) {
             /*
              * If we're running behind schedule, we should not catch up
              * too fast, as that will make some guests unhappy:
-             * 1) We must process a minimum of MIN_FR_PER_TICK frames,
+             * 1) We must process a minimum of MIN_UFR_PER_TICK frames,
              *    otherwise we will never catch up
              * 2) Process frames until the guest has requested an irq (IOC)
              */
-            if (i >= MIN_FR_PER_TICK) {
+            if (i >= MIN_UFR_PER_TICK) {
                 ehci_commit_irq(ehci);
                 if ((ehci->usbsts & USBINTR_MASK) & ehci->usbintr) {
                     break;
                 }
             }
+            if (ehci->periodic_sched_active) {
+                ehci->periodic_sched_active--;
+            }
             ehci_update_frindex(ehci, 1);
-            ehci_advance_periodic_state(ehci);
-            ehci->last_run_ns += FRAME_TIMER_NS;
+            if ((ehci->frindex & 7) == 0) {
+                ehci_advance_periodic_state(ehci);
+            }
+            ehci->last_run_ns += UFRAME_TIMER_NS;
         }
     } else {
-        if (ehci->async_stepdown < ehci->maxframes / 2) {
-            ehci->async_stepdown++;
-        }
-        ehci_update_frindex(ehci, frames);
-        ehci->last_run_ns += FRAME_TIMER_NS * frames;
+        ehci->periodic_sched_active = 0;
+        ehci_update_frindex(ehci, uframes);
+        ehci->last_run_ns += UFRAME_TIMER_NS * uframes;
+    }
+
+    if (ehci->periodic_sched_active) {
+        ehci->async_stepdown = 0;
+    } else if (ehci->async_stepdown < ehci->maxframes / 2) {
+        ehci->async_stepdown++;
     }
 
     /*  Async is not inside loop since it executes everything it can once
@@ -2256,7 +2368,7 @@ static void ehci_frame_timer(void *opaque)
         /* If we've raised int, we speed up the timer, so that we quickly
          * notice any new packets queued up in response */
         if (ehci->int_req_by_async && (ehci->usbsts & USBSTS_INT)) {
-            expire_time = t_now + get_ticks_per_sec() / (FRAME_TIMER_FREQ * 2);
+            expire_time = t_now + get_ticks_per_sec() / (FRAME_TIMER_FREQ * 4);
             ehci->int_req_by_async = false;
         } else {
             expire_time = t_now + (get_ticks_per_sec()
@@ -2301,7 +2413,19 @@ static USBPortOps ehci_port_ops = {
 
 static USBBusOps ehci_bus_ops = {
     .register_companion = ehci_register_companion,
+    .wakeup_endpoint = ehci_wakeup_endpoint,
 };
+
+static void usb_ehci_pre_save(void *opaque)
+{
+    EHCIState *ehci = opaque;
+    uint32_t new_frindex;
+
+    /* Round down frindex to a multiple of 8 for migration compatibility */
+    new_frindex = ehci->frindex & ~7;
+    ehci->last_run_ns -= (ehci->frindex - new_frindex) * UFRAME_TIMER_NS;
+    ehci->frindex = new_frindex;
+}
 
 static int usb_ehci_post_load(void *opaque, int version_id)
 {
@@ -2353,6 +2477,7 @@ const VMStateDescription vmstate_ehci = {
     .name        = "ehci-core",
     .version_id  = 2,
     .minimum_version_id  = 1,
+    .pre_save    = usb_ehci_pre_save,
     .post_load   = usb_ehci_post_load,
     .fields      = (VMStateField[]) {
         /* mmio registers */
@@ -2385,25 +2510,18 @@ const VMStateDescription vmstate_ehci = {
     }
 };
 
-void usb_ehci_initfn(EHCIState *s, DeviceState *dev)
+void usb_ehci_realize(EHCIState *s, DeviceState *dev, Error **errp)
 {
     int i;
 
-    /* 2.2 host controller interface version */
-    s->caps[0x00] = (uint8_t)(s->opregbase - s->capsbase);
-    s->caps[0x01] = 0x00;
-    s->caps[0x02] = 0x00;
-    s->caps[0x03] = 0x01;        /* HC version */
-    s->caps[0x04] = NB_PORTS;    /* Number of downstream ports */
-    s->caps[0x05] = 0x00;        /* No companion ports at present */
-    s->caps[0x06] = 0x00;
-    s->caps[0x07] = 0x00;
-    s->caps[0x08] = 0x80;        /* We can cache whole frame, no 64-bit */
-    s->caps[0x0a] = 0x00;
-    s->caps[0x0b] = 0x00;
+    if (s->portnr > NB_PORTS) {
+        error_setg(errp, "Too many ports! Max. port number is %d.",
+                   NB_PORTS);
+        return;
+    }
 
     usb_bus_new(&s->bus, &ehci_bus_ops, dev);
-    for(i = 0; i < NB_PORTS; i++) {
+    for (i = 0; i < s->portnr; i++) {
         usb_register_port(&s->bus, &s->ports[i], s, i, &ehci_port_ops,
                           USB_SPEED_MASK_HIGH);
         s->ports[i].dev = 0;
@@ -2411,24 +2529,41 @@ void usb_ehci_initfn(EHCIState *s, DeviceState *dev)
 
     s->frame_timer = qemu_new_timer_ns(vm_clock, ehci_frame_timer, s);
     s->async_bh = qemu_bh_new(ehci_frame_timer, s);
+
+    qemu_register_reset(ehci_reset, s);
+    qemu_add_vm_change_state_handler(usb_ehci_vm_state_change, s);
+}
+
+void usb_ehci_init(EHCIState *s, DeviceState *dev)
+{
+    /* 2.2 host controller interface version */
+    s->caps[0x00] = (uint8_t)(s->opregbase - s->capsbase);
+    s->caps[0x01] = 0x00;
+    s->caps[0x02] = 0x00;
+    s->caps[0x03] = 0x01;        /* HC version */
+    s->caps[0x04] = s->portnr;   /* Number of downstream ports */
+    s->caps[0x05] = 0x00;        /* No companion ports at present */
+    s->caps[0x06] = 0x00;
+    s->caps[0x07] = 0x00;
+    s->caps[0x08] = 0x80;        /* We can cache whole frame, no 64-bit */
+    s->caps[0x0a] = 0x00;
+    s->caps[0x0b] = 0x00;
+
     QTAILQ_INIT(&s->aqueues);
     QTAILQ_INIT(&s->pqueues);
     usb_packet_init(&s->ipacket);
 
-    qemu_register_reset(ehci_reset, s);
-    qemu_add_vm_change_state_handler(usb_ehci_vm_state_change, s);
-
-    memory_region_init(&s->mem, "ehci", MMIO_SIZE);
-    memory_region_init_io(&s->mem_caps, &ehci_mmio_caps_ops, s,
+    memory_region_init(&s->mem, OBJECT(dev), "ehci", MMIO_SIZE);
+    memory_region_init_io(&s->mem_caps, OBJECT(dev), &ehci_mmio_caps_ops, s,
                           "capabilities", CAPA_SIZE);
-    memory_region_init_io(&s->mem_opreg, &ehci_mmio_opreg_ops, s,
-                          "operational", PORTSC_BEGIN);
-    memory_region_init_io(&s->mem_ports, &ehci_mmio_port_ops, s,
-                          "ports", PORTSC_END - PORTSC_BEGIN);
+    memory_region_init_io(&s->mem_opreg, OBJECT(dev), &ehci_mmio_opreg_ops, s,
+                          "operational", s->portscbase);
+    memory_region_init_io(&s->mem_ports, OBJECT(dev), &ehci_mmio_port_ops, s,
+                          "ports", 4 * s->portnr);
 
     memory_region_add_subregion(&s->mem, s->capsbase, &s->mem_caps);
     memory_region_add_subregion(&s->mem, s->opregbase, &s->mem_opreg);
-    memory_region_add_subregion(&s->mem, s->opregbase + PORTSC_BEGIN,
+    memory_region_add_subregion(&s->mem, s->opregbase + s->portscbase,
                                 &s->mem_ports);
 }
 

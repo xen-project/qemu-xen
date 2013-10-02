@@ -11,16 +11,15 @@
  *
  */
 
-#include "hw/virtio.h"
-#include "hw/pc.h"
-#include "qemu_socket.h"
-#include "hw/virtio-pci.h"
+#include "hw/virtio/virtio.h"
+#include "hw/i386/pc.h"
+#include "qemu/sockets.h"
 #include "virtio-9p.h"
 #include "fsdev/qemu-fsdev.h"
 #include "virtio-9p-xattr.h"
 #include "virtio-9p-coth.h"
 #include "trace.h"
-#include "migration.h"
+#include "migration/migration.h"
 
 int open_fd_hw;
 int total_open_fd;
@@ -327,7 +326,7 @@ static int free_fid(V9fsPDU *pdu, V9fsFidState *fidp)
     return retval;
 }
 
-static void put_fid(V9fsPDU *pdu, V9fsFidState *fidp)
+static int put_fid(V9fsPDU *pdu, V9fsFidState *fidp)
 {
     BUG_ON(!fidp->ref);
     fidp->ref--;
@@ -348,8 +347,9 @@ static void put_fid(V9fsPDU *pdu, V9fsFidState *fidp)
                 pdu->s->migration_blocker = NULL;
             }
         }
-        free_fid(pdu, fidp);
+        return free_fid(pdu, fidp);
     }
+    return 0;
 }
 
 static V9fsFidState *clunk_fid(V9fsState *s, int32_t fid)
@@ -631,7 +631,7 @@ static void complete_pdu(V9fsState *s, V9fsPDU *pdu, ssize_t len)
     virtqueue_push(s->vq, &pdu->elem, len);
 
     /* FIXME: we should batch these completions */
-    virtio_notify(&s->vdev, s->vq);
+    virtio_notify(VIRTIO_DEVICE(s), s->vq);
 
     /* Now wakeup anybody waiting in flush for this request */
     qemu_co_queue_next(&pdu->complete);
@@ -658,7 +658,7 @@ static mode_t v9mode_to_mode(uint32_t mode, V9fsString *extension)
         ret |= S_IFIFO;
     }
     if (mode & P9_STAT_MODE_DEVICE) {
-        if (extension && extension->data[0] == 'c') {
+        if (extension->size && extension->data[0] == 'c') {
             ret |= S_IFCHR;
         } else {
             ret |= S_IFBLK;
@@ -1537,9 +1537,10 @@ static void v9fs_clunk(void *opaque)
      * free the fid.
      */
     fidp->ref++;
-    err = offset;
-
-    put_fid(pdu, fidp);
+    err = put_fid(pdu, fidp);
+    if (!err) {
+        err = offset;
+    }
 out_nofid:
     complete_pdu(s, pdu, err);
 }
@@ -3101,11 +3102,7 @@ static void v9fs_xattrcreate(void *opaque)
     xattr_fidp->fs.xattr.flags = flags;
     v9fs_string_init(&xattr_fidp->fs.xattr.name);
     v9fs_string_copy(&xattr_fidp->fs.xattr.name, &name);
-    if (size) {
-        xattr_fidp->fs.xattr.value = g_malloc(size);
-    } else {
-        xattr_fidp->fs.xattr.value = NULL;
-    }
+    xattr_fidp->fs.xattr.value = g_malloc(size);
     err = offset;
     put_fid(pdu, file_fidp);
 out_nofid:
@@ -3271,7 +3268,7 @@ void handle_9p_output(VirtIODevice *vdev, VirtQueue *vq)
     free_pdu(s, pdu);
 }
 
-void virtio_9p_set_fd_limit(void)
+static void __attribute__((__constructor__)) virtio_9p_set_fd_limit(void)
 {
     struct rlimit rlim;
     if (getrlimit(RLIMIT_NOFILE, &rlim) < 0) {

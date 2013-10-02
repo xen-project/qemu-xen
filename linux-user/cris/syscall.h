@@ -1,3 +1,6 @@
+#ifndef CRIS_SYSCALL_H
+#define CRIS_SYSCALL_H 1
+
 
 #define UNAME_MACHINE "cris"
 
@@ -34,3 +37,7 @@ struct target_pt_regs {
         unsigned long exs;
         unsigned long eda;
 };
+
+#define TARGET_CLONE_BACKWARDS2
+
+#endif

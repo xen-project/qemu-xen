@@ -12,11 +12,11 @@
  *
  */
 
-#include "qemu-timer.h"
+#include "qemu/timer.h"
 #include "trace.h"
 #include "qed.h"
-#include "qerror.h"
-#include "migration.h"
+#include "qapi/qmp/qerror.h"
+#include "migration/migration.h"
 
 static void qed_aio_cancel(BlockDriverAIOCB *blockacb)
 {
@@ -373,7 +373,7 @@ static void bdrv_qed_rebind(BlockDriverState *bs)
     s->bs = bs;
 }
 
-static int bdrv_qed_open(BlockDriverState *bs, int flags)
+static int bdrv_qed_open(BlockDriverState *bs, QDict *options, int flags)
 {
     BDRVQEDState *s = bs->opaque;
     QEDHeader le_header;
@@ -390,7 +390,7 @@ static int bdrv_qed_open(BlockDriverState *bs, int flags)
     qed_header_le_to_cpu(&le_header, &s->header);
 
     if (s->header.magic != QED_MAGIC) {
-        return -EINVAL;
+        return -EMEDIUMTYPE;
     }
     if (s->header.features & ~QED_FEATURE_MASK) {
         /* image uses unsupported feature bits */
@@ -558,7 +558,7 @@ static int qed_create(const char *filename, uint32_t cluster_size,
         return ret;
     }
 
-    ret = bdrv_file_open(&bs, filename, BDRV_O_RDWR | BDRV_O_CACHE_WB);
+    ret = bdrv_file_open(&bs, filename, NULL, BDRV_O_RDWR | BDRV_O_CACHE_WB);
     if (ret < 0) {
         return ret;
     }
@@ -1526,7 +1526,7 @@ static void bdrv_qed_invalidate_cache(BlockDriverState *bs)
 
     bdrv_qed_close(bs);
     memset(s, 0, sizeof(BDRVQEDState));
-    bdrv_qed_open(bs, bs->open_flags);
+    bdrv_qed_open(bs, NULL, bs->open_flags);
 }
 
 static int bdrv_qed_check(BlockDriverState *bs, BdrvCheckResult *result,
@@ -1574,6 +1574,7 @@ static BlockDriver bdrv_qed = {
     .bdrv_close               = bdrv_qed_close,
     .bdrv_reopen_prepare      = bdrv_qed_reopen_prepare,
     .bdrv_create              = bdrv_qed_create,
+    .bdrv_has_zero_init       = bdrv_has_zero_init_1,
     .bdrv_co_is_allocated     = bdrv_qed_co_is_allocated,
     .bdrv_make_empty          = bdrv_qed_make_empty,
     .bdrv_aio_readv           = bdrv_qed_aio_readv,

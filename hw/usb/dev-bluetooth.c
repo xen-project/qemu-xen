@@ -21,7 +21,7 @@
 #include "qemu-common.h"
 #include "hw/usb.h"
 #include "hw/usb/desc.h"
-#include "net.h"
+#include "sysemu/bt.h"
 #include "hw/bt.h"
 
 struct USBBtState {
@@ -478,7 +478,7 @@ static void usb_bt_out_hci_packet_event(void *opaque,
     struct USBBtState *s = (struct USBBtState *) opaque;
 
     if (s->evt.len == 0) {
-        usb_wakeup(s->intr);
+        usb_wakeup(s->intr, 0);
     }
     usb_bt_fifo_enqueue(&s->evt, data, len);
 }
@@ -553,9 +553,10 @@ static void usb_bt_class_initfn(ObjectClass *klass, void *data)
     uc->handle_data    = usb_bt_handle_data;
     uc->handle_destroy = usb_bt_handle_destroy;
     dc->vmsd = &vmstate_usb_bt;
+    set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
 }
 
-static TypeInfo bt_info = {
+static const TypeInfo bt_info = {
     .name          = "usb-bt-dongle",
     .parent        = TYPE_USB_DEVICE,
     .instance_size = sizeof(struct USBBtState),

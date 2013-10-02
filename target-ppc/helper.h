@@ -1,4 +1,4 @@
-#include "def-helper.h"
+#include "exec/def-helper.h"
 
 DEF_HELPER_3(raise_exception_err, void, env, i32, i32)
 DEF_HELPER_2(raise_exception, void, env, i32)
@@ -25,20 +25,18 @@ DEF_HELPER_3(stmw, void, env, tl, i32)
 DEF_HELPER_4(lsw, void, env, tl, i32, i32)
 DEF_HELPER_5(lswx, void, env, tl, i32, i32, i32)
 DEF_HELPER_4(stsw, void, env, tl, i32, i32)
-DEF_HELPER_2(dcbz, void, env, tl)
-DEF_HELPER_2(dcbz_970, void, env, tl)
+DEF_HELPER_3(dcbz, void, env, tl, i32)
 DEF_HELPER_2(icbi, void, env, tl)
 DEF_HELPER_5(lscbx, tl, env, tl, i32, i32, i32)
 
 #if defined(TARGET_PPC64)
-DEF_HELPER_FLAGS_2(mulhd, TCG_CALL_NO_RWG_SE, i64, i64, i64)
-DEF_HELPER_FLAGS_2(mulhdu, TCG_CALL_NO_RWG_SE, i64, i64, i64)
 DEF_HELPER_3(mulldo, i64, env, i64, i64)
 #endif
 
 DEF_HELPER_FLAGS_1(cntlzw, TCG_CALL_NO_RWG_SE, tl, tl)
 DEF_HELPER_FLAGS_1(popcntb, TCG_CALL_NO_RWG_SE, tl, tl)
 DEF_HELPER_FLAGS_1(popcntw, TCG_CALL_NO_RWG_SE, tl, tl)
+DEF_HELPER_FLAGS_2(cmpb, TCG_CALL_NO_RWG_SE, tl, tl, tl)
 DEF_HELPER_3(sraw, tl, env, tl, tl)
 #if defined(TARGET_PPC64)
 DEF_HELPER_FLAGS_1(cntlzd, TCG_CALL_NO_RWG_SE, tl, tl)
@@ -83,9 +81,6 @@ DEF_HELPER_4(fmadd, i64, env, i64, i64, i64)
 DEF_HELPER_4(fmsub, i64, env, i64, i64, i64)
 DEF_HELPER_4(fnmadd, i64, env, i64, i64, i64)
 DEF_HELPER_4(fnmsub, i64, env, i64, i64, i64)
-DEF_HELPER_2(fabs, i64, env, i64)
-DEF_HELPER_2(fnabs, i64, env, i64)
-DEF_HELPER_2(fneg, i64, env, i64)
 DEF_HELPER_2(fsqrt, i64, env, i64)
 DEF_HELPER_2(fre, i64, env, i64)
 DEF_HELPER_2(fres, i64, env, i64)
@@ -385,7 +380,6 @@ DEF_HELPER_1(load_601_rtcl, tl, env)
 DEF_HELPER_1(load_601_rtcu, tl, env)
 #if !defined(CONFIG_USER_ONLY)
 #if defined(TARGET_PPC64)
-DEF_HELPER_2(store_asr, void, env, tl)
 DEF_HELPER_1(load_purr, tl, env)
 #endif
 DEF_HELPER_2(store_sdr1, void, env, tl)
@@ -405,7 +399,6 @@ DEF_HELPER_2(store_40x_dbcr0, void, env, tl)
 DEF_HELPER_2(store_40x_sler, void, env, tl)
 DEF_HELPER_2(store_booke_tcr, void, env, tl)
 DEF_HELPER_2(store_booke_tsr, void, env, tl)
-DEF_HELPER_1(load_epr, tl, env)
 DEF_HELPER_3(store_ibatl, void, env, i32, tl)
 DEF_HELPER_3(store_ibatu, void, env, i32, tl)
 DEF_HELPER_3(store_dbatl, void, env, i32, tl)
@@ -414,4 +407,4 @@ DEF_HELPER_3(store_601_batl, void, env, i32, tl)
 DEF_HELPER_3(store_601_batu, void, env, i32, tl)
 #endif
 
-#include "def-helper.h"
+#include "exec/def-helper.h"

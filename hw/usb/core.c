@@ -25,7 +25,7 @@
  */
 #include "qemu-common.h"
 #include "hw/usb.h"
-#include "iov.h"
+#include "qemu/iov.h"
 #include "trace.h"
 
 void usb_attach(USBPort *port)
@@ -71,7 +71,7 @@ void usb_device_reset(USBDevice *dev)
     usb_device_handle_reset(dev);
 }
 
-void usb_wakeup(USBEndpoint *ep)
+void usb_wakeup(USBEndpoint *ep, unsigned int stream)
 {
     USBDevice *dev = ep->dev;
     USBBus *bus = usb_bus_from_device(dev);
@@ -80,7 +80,7 @@ void usb_wakeup(USBEndpoint *ep)
         dev->port->ops->wakeup(dev->port);
     }
     if (bus->ops->wakeup_endpoint) {
-        bus->ops->wakeup_endpoint(bus, ep);
+        bus->ops->wakeup_endpoint(bus, ep, stream);
     }
 }
 
@@ -406,7 +406,11 @@ void usb_handle_packet(USBDevice *dev, USBPacket *p)
     if (QTAILQ_EMPTY(&p->ep->queue) || p->ep->pipeline) {
         usb_process_one(p);
         if (p->status == USB_RET_ASYNC) {
+            /* hcd drivers cannot handle async for isoc */
             assert(p->ep->type != USB_ENDPOINT_XFER_ISOC);
+            /* using async for interrupt packets breaks migration */
+            assert(p->ep->type != USB_ENDPOINT_XFER_INT ||
+                   (dev->flags & (1 << USB_DEV_FLAG_IS_HOST)));
             usb_packet_set_state(p, USB_PACKET_ASYNC);
             QTAILQ_INSERT_TAIL(&p->ep->queue, p, queue);
         } else if (p->status == USB_RET_ADD_TO_QUEUE) {
@@ -541,14 +545,16 @@ void usb_packet_set_state(USBPacket *p, USBPacketState state)
     p->state = state;
 }
 
-void usb_packet_setup(USBPacket *p, int pid, USBEndpoint *ep, uint64_t id,
-                      bool short_not_ok, bool int_req)
+void usb_packet_setup(USBPacket *p, int pid,
+                      USBEndpoint *ep, unsigned int stream,
+                      uint64_t id, bool short_not_ok, bool int_req)
 {
     assert(!usb_packet_is_inflight(p));
     assert(p->iov.iov != NULL);
     p->id = id;
     p->pid = pid;
     p->ep = ep;
+    p->stream = stream;
     p->status = USB_RET_SUCCESS;
     p->actual_length = 0;
     p->parameter = 0;
@@ -566,15 +572,17 @@ void usb_packet_addbuf(USBPacket *p, void *ptr, size_t len)
 
 void usb_packet_copy(USBPacket *p, void *ptr, size_t bytes)
 {
+    QEMUIOVector *iov = p->combined ? &p->combined->iov : &p->iov;
+
     assert(p->actual_length >= 0);
-    assert(p->actual_length + bytes <= p->iov.size);
+    assert(p->actual_length + bytes <= iov->size);
     switch (p->pid) {
     case USB_TOKEN_SETUP:
     case USB_TOKEN_OUT:
-        iov_to_buf(p->iov.iov, p->iov.niov, p->actual_length, ptr, bytes);
+        iov_to_buf(iov->iov, iov->niov, p->actual_length, ptr, bytes);
         break;
     case USB_TOKEN_IN:
-        iov_from_buf(p->iov.iov, p->iov.niov, p->actual_length, ptr, bytes);
+        iov_from_buf(iov->iov, iov->niov, p->actual_length, ptr, bytes);
         break;
     default:
         fprintf(stderr, "%s: invalid pid: %x\n", __func__, p->pid);
@@ -585,12 +593,19 @@ void usb_packet_copy(USBPacket *p, void *ptr, size_t bytes)
 
 void usb_packet_skip(USBPacket *p, size_t bytes)
 {
+    QEMUIOVector *iov = p->combined ? &p->combined->iov : &p->iov;
+
     assert(p->actual_length >= 0);
-    assert(p->actual_length + bytes <= p->iov.size);
+    assert(p->actual_length + bytes <= iov->size);
     if (p->pid == USB_TOKEN_IN) {
-        iov_memset(p->iov.iov, p->iov.niov, p->actual_length, 0, bytes);
+        iov_memset(iov->iov, iov->niov, p->actual_length, 0, bytes);
     }
     p->actual_length += bytes;
+}
+
+size_t usb_packet_size(USBPacket *p)
+{
+    return p->combined ? p->combined->iov.size : p->iov.size;
 }
 
 void usb_packet_cleanup(USBPacket *p)
@@ -751,13 +766,19 @@ void usb_ep_set_pipeline(USBDevice *dev, int pid, int ep, bool enabled)
     uep->pipeline = enabled;
 }
 
+void usb_ep_set_halted(USBDevice *dev, int pid, int ep, bool halted)
+{
+    struct USBEndpoint *uep = usb_ep_get(dev, pid, ep);
+    uep->halted = halted;
+}
+
 USBPacket *usb_ep_find_packet_by_id(USBDevice *dev, int pid, int ep,
                                     uint64_t id)
 {
     struct USBEndpoint *uep = usb_ep_get(dev, pid, ep);
     USBPacket *p;
 
-    while ((p = QTAILQ_FIRST(&uep->queue)) != NULL) {
+    QTAILQ_FOREACH(p, &uep->queue, queue) {
         if (p->id == id) {
             return p;
         }

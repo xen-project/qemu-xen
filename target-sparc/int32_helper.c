@@ -19,7 +19,7 @@
 
 #include "cpu.h"
 #include "trace.h"
-#include "sysemu.h"
+#include "sysemu/sysemu.h"
 
 #define DEBUG_PCALL
 
@@ -58,8 +58,10 @@ static const char * const excp_names[0x80] = {
 };
 #endif
 
-void do_interrupt(CPUSPARCState *env)
+void sparc_cpu_do_interrupt(CPUState *cs)
 {
+    SPARCCPU *cpu = SPARC_CPU(cs);
+    CPUSPARCState *env = &cpu->env;
     int cwp, intno = env->exception_index;
 
     /* Compute PSR before exposing state.  */
@@ -84,7 +86,7 @@ void do_interrupt(CPUSPARCState *env)
         }
 
         qemu_log("%6d: %s (v=%02x)\n", count, name, intno);
-        log_cpu_state(env, 0);
+        log_cpu_state(cs, 0);
 #if 0
         {
             int i;

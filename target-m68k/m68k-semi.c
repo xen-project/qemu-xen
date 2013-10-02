@@ -33,10 +33,10 @@
 #define SEMIHOSTING_HEAP_SIZE (128 * 1024 * 1024)
 #else
 #include "qemu-common.h"
-#include "gdbstub.h"
-#include "softmmu-semi.h"
+#include "exec/gdbstub.h"
+#include "exec/softmmu-semi.h"
 #endif
-#include "sysemu.h"
+#include "sysemu/sysemu.h"
 
 #define HOSTED_EXIT  0
 #define HOSTED_INIT_SIM 1
@@ -161,8 +161,11 @@ static void m68k_semi_return_u64(CPUM68KState *env, uint64_t ret, uint32_t err)
 
 static int m68k_semi_is_fseek;
 
-static void m68k_semi_cb(CPUM68KState *env, target_ulong ret, target_ulong err)
+static void m68k_semi_cb(CPUState *cs, target_ulong ret, target_ulong err)
 {
+    M68kCPU *cpu = M68K_CPU(cs);
+    CPUM68KState *env = &cpu->env;
+
     if (m68k_semi_is_fseek) {
         /* FIXME: We've already lost the high bits of the fseek
            return value.  */

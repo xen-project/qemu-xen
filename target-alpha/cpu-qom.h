@@ -20,7 +20,7 @@
 #ifndef QEMU_ALPHA_CPU_QOM_H
 #define QEMU_ALPHA_CPU_QOM_H
 
-#include "qemu/cpu.h"
+#include "qom/cpu.h"
 #include "cpu.h"
 
 #define TYPE_ALPHA_CPU "alpha-cpu"
@@ -34,6 +34,7 @@
 
 /**
  * AlphaCPUClass:
+ * @parent_realize: The parent class' realize handler.
  * @parent_reset: The parent class' reset handler.
  *
  * An Alpha CPU model.
@@ -43,6 +44,7 @@ typedef struct AlphaCPUClass {
     CPUClass parent_class;
     /*< public >*/
 
+    DeviceRealize parent_realize;
     void (*parent_reset)(CPUState *cpu);
 } AlphaCPUClass;
 
@@ -58,14 +60,29 @@ typedef struct AlphaCPU {
     /*< public >*/
 
     CPUAlphaState env;
+
+    /* This alarm doesn't exist in real hardware; we wish it did.  */
+    struct QEMUTimer *alarm_timer;
 } AlphaCPU;
 
 static inline AlphaCPU *alpha_env_get_cpu(CPUAlphaState *env)
 {
-    return ALPHA_CPU(container_of(env, AlphaCPU, env));
+    return container_of(env, AlphaCPU, env);
 }
 
 #define ENV_GET_CPU(e) CPU(alpha_env_get_cpu(e))
 
+#define ENV_OFFSET offsetof(AlphaCPU, env)
+
+#ifndef CONFIG_USER_ONLY
+extern const struct VMStateDescription vmstate_alpha_cpu;
+#endif
+
+void alpha_cpu_do_interrupt(CPUState *cpu);
+void alpha_cpu_dump_state(CPUState *cs, FILE *f, fprintf_function cpu_fprintf,
+                          int flags);
+hwaddr alpha_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
+int alpha_cpu_gdb_read_register(CPUState *cpu, uint8_t *buf, int reg);
+int alpha_cpu_gdb_write_register(CPUState *cpu, uint8_t *buf, int reg);
 
 #endif

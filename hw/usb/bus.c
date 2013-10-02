@@ -1,8 +1,8 @@
 #include "hw/hw.h"
 #include "hw/usb.h"
 #include "hw/qdev.h"
-#include "sysemu.h"
-#include "monitor.h"
+#include "sysemu/sysemu.h"
+#include "monitor/monitor.h"
 #include "trace.h"
 
 static void usb_bus_dev_print(Monitor *mon, DeviceState *qdev, int indent);
@@ -13,6 +13,7 @@ static int usb_qdev_exit(DeviceState *qdev);
 
 static Property usb_props[] = {
     DEFINE_PROP_STRING("port", USBDevice, port_path),
+    DEFINE_PROP_STRING("serial", USBDevice, serial),
     DEFINE_PROP_BIT("full-path", USBDevice, flags,
                     USB_DEV_FLAG_FULL_PATH, true),
     DEFINE_PROP_END_OF_LIST()
@@ -166,6 +167,9 @@ const char *usb_device_get_product_desc(USBDevice *dev)
 const USBDesc *usb_device_get_usb_desc(USBDevice *dev)
 {
     USBDeviceClass *klass = USB_DEVICE_GET_CLASS(dev);
+    if (dev->usb_desc) {
+        return dev->usb_desc;
+    }
     return klass->usb_desc;
 }
 
@@ -183,6 +187,14 @@ void usb_device_flush_ep_queue(USBDevice *dev, USBEndpoint *ep)
     USBDeviceClass *klass = USB_DEVICE_GET_CLASS(dev);
     if (klass->flush_ep_queue) {
         klass->flush_ep_queue(dev, ep);
+    }
+}
+
+void usb_device_ep_stopped(USBDevice *dev, USBEndpoint *ep)
+{
+    USBDeviceClass *klass = USB_DEVICE_GET_CLASS(dev);
+    if (klass->ep_stopped) {
+        klass->ep_stopped(dev, ep);
     }
 }
 
@@ -330,8 +342,10 @@ void usb_port_location(USBPort *downstream, USBPort *upstream, int portnr)
     if (upstream) {
         snprintf(downstream->path, sizeof(downstream->path), "%s.%d",
                  upstream->path, portnr);
+        downstream->hubcount = upstream->hubcount + 1;
     } else {
         snprintf(downstream->path, sizeof(downstream->path), "%d", portnr);
+        downstream->hubcount = 0;
     }
 }
 
@@ -404,19 +418,47 @@ void usb_release_port(USBDevice *dev)
     bus->nfree++;
 }
 
+static void usb_mask_to_str(char *dest, size_t size,
+                            unsigned int speedmask)
+{
+    static const struct {
+        unsigned int mask;
+        const char *name;
+    } speeds[] = {
+        { .mask = USB_SPEED_MASK_FULL,  .name = "full"  },
+        { .mask = USB_SPEED_MASK_HIGH,  .name = "high"  },
+        { .mask = USB_SPEED_MASK_SUPER, .name = "super" },
+    };
+    int i, pos = 0;
+
+    for (i = 0; i < ARRAY_SIZE(speeds); i++) {
+        if (speeds[i].mask & speedmask) {
+            pos += snprintf(dest + pos, size - pos, "%s%s",
+                            pos ? "+" : "",
+                            speeds[i].name);
+        }
+    }
+}
+
 int usb_device_attach(USBDevice *dev)
 {
     USBBus *bus = usb_bus_from_device(dev);
     USBPort *port = dev->port;
+    char devspeed[32], portspeed[32];
 
     assert(port != NULL);
     assert(!dev->attached);
-    trace_usb_port_attach(bus->busnr, port->path);
+    usb_mask_to_str(devspeed, sizeof(devspeed), dev->speedmask);
+    usb_mask_to_str(portspeed, sizeof(portspeed), port->speedmask);
+    trace_usb_port_attach(bus->busnr, port->path,
+                          devspeed, portspeed);
 
     if (!(port->speedmask & dev->speedmask)) {
-        error_report("Warning: speed mismatch trying to attach "
-                     "usb device %s to bus %s",
-                     dev->product_desc, bus->qbus.name);
+        error_report("Warning: speed mismatch trying to attach"
+                     " usb device \"%s\" (%s speed)"
+                     " to bus \"%s\", port \"%s\" (%s speed)",
+                     dev->product_desc, devspeed,
+                     bus->qbus.name, port->path, portspeed);
         return -1;
     }
 
@@ -531,7 +573,7 @@ static char *usb_get_fw_dev_path(DeviceState *qdev)
     return fw_path;
 }
 
-void usb_info(Monitor *mon)
+void usb_info(Monitor *mon, const QDict *qdict)
 {
     USBBus *bus;
     USBDevice *dev;
@@ -617,7 +659,7 @@ static void usb_device_class_init(ObjectClass *klass, void *data)
     k->props    = usb_props;
 }
 
-static TypeInfo usb_device_type_info = {
+static const TypeInfo usb_device_type_info = {
     .name = TYPE_USB_DEVICE,
     .parent = TYPE_DEVICE,
     .instance_size = sizeof(USBDevice),

@@ -36,7 +36,7 @@
 
 /* Needed early for CONFIG_BSD etc. */
 #include "config-host.h"
-#include "sysemu.h"
+#include "sysemu/sysemu.h"
 #include "net/slirp.h"
 #include "qemu-options.h"
 
@@ -362,4 +362,16 @@ int qemu_create_pidfile(const char *filename)
 bool is_daemonized(void)
 {
     return daemonize;
+}
+
+int os_mlock(void)
+{
+    int ret = 0;
+
+    ret = mlockall(MCL_CURRENT | MCL_FUTURE);
+    if (ret < 0) {
+        perror("mlockall");
+    }
+
+    return ret;
 }

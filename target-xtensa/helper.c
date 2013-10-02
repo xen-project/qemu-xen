@@ -26,19 +26,44 @@
  */
 
 #include "cpu.h"
-#include "exec-all.h"
-#include "gdbstub.h"
-#include "host-utils.h"
+#include "exec/exec-all.h"
+#include "exec/gdbstub.h"
+#include "qemu/host-utils.h"
 #if !defined(CONFIG_USER_ONLY)
 #include "hw/loader.h"
 #endif
 
 static struct XtensaConfigList *xtensa_cores;
 
+static void xtensa_core_class_init(ObjectClass *oc, void *data)
+{
+    CPUClass *cc = CPU_CLASS(oc);
+    XtensaCPUClass *xcc = XTENSA_CPU_CLASS(oc);
+    const XtensaConfig *config = data;
+
+    xcc->config = config;
+
+    /* Use num_core_regs to see only non-privileged registers in an unmodified
+     * gdb. Use num_regs to see all registers. gdb modification is required
+     * for that: reset bit 0 in the 'flags' field of the registers definitions
+     * in the gdb/xtensa-config.c inside gdb source tree or inside gdb overlay.
+     */
+    cc->gdb_num_core_regs = config->gdb_regmap.num_regs;
+}
+
 void xtensa_register_core(XtensaConfigList *node)
 {
+    TypeInfo type = {
+        .parent = TYPE_XTENSA_CPU,
+        .class_init = xtensa_core_class_init,
+        .class_data = (void *)node->config,
+    };
+
     node->next = xtensa_cores;
     xtensa_cores = node;
+    type.name = g_strdup_printf("%s-" TYPE_XTENSA_CPU, node->config->name);
+    type_register(&type);
+    g_free((gpointer)type.name);
 }
 
 static uint32_t check_hw_breakpoints(CPUXtensaState *env)
@@ -54,7 +79,7 @@ static uint32_t check_hw_breakpoints(CPUXtensaState *env)
     return 0;
 }
 
-static void breakpoint_handler(CPUXtensaState *env)
+void xtensa_breakpoint_handler(CPUXtensaState *env)
 {
     if (env->watchpoint_hit) {
         if (env->watchpoint_hit->flags & BP_CPU) {
@@ -72,39 +97,22 @@ static void breakpoint_handler(CPUXtensaState *env)
 
 XtensaCPU *cpu_xtensa_init(const char *cpu_model)
 {
-    static int tcg_inited;
-    static int debug_handler_inited;
+    ObjectClass *oc;
     XtensaCPU *cpu;
     CPUXtensaState *env;
-    const XtensaConfig *config = NULL;
-    XtensaConfigList *core = xtensa_cores;
 
-    for (; core; core = core->next)
-        if (strcmp(core->config->name, cpu_model) == 0) {
-            config = core->config;
-            break;
-        }
-
-    if (config == NULL) {
+    oc = cpu_class_by_name(TYPE_XTENSA_CPU, cpu_model);
+    if (oc == NULL) {
         return NULL;
     }
 
-    cpu = XTENSA_CPU(object_new(TYPE_XTENSA_CPU));
+    cpu = XTENSA_CPU(object_new(object_class_get_name(oc)));
     env = &cpu->env;
-    env->config = config;
-
-    if (!tcg_inited) {
-        tcg_inited = 1;
-        xtensa_translate_init();
-    }
-
-    if (!debug_handler_inited && tcg_enabled()) {
-        debug_handler_inited = 1;
-        cpu_set_debug_excp_handler(breakpoint_handler);
-    }
 
     xtensa_irq_init(env);
-    qemu_init_vcpu(env);
+
+    object_property_set_bool(OBJECT(cpu), true, "realized", NULL);
+
     return cpu;
 }
 
@@ -118,17 +126,18 @@ void xtensa_cpu_list(FILE *f, fprintf_function cpu_fprintf)
     }
 }
 
-hwaddr cpu_get_phys_page_debug(CPUXtensaState *env, target_ulong addr)
+hwaddr xtensa_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
 {
+    XtensaCPU *cpu = XTENSA_CPU(cs);
     uint32_t paddr;
     uint32_t page_size;
     unsigned access;
 
-    if (xtensa_get_physical_addr(env, false, addr, 0, 0,
+    if (xtensa_get_physical_addr(&cpu->env, false, addr, 0, 0,
                 &paddr, &page_size, &access) == 0) {
         return paddr;
     }
-    if (xtensa_get_physical_addr(env, false, addr, 2, 0,
+    if (xtensa_get_physical_addr(&cpu->env, false, addr, 2, 0,
                 &paddr, &page_size, &access) == 0) {
         return paddr;
     }
@@ -188,8 +197,11 @@ static void handle_interrupt(CPUXtensaState *env)
     }
 }
 
-void do_interrupt(CPUXtensaState *env)
+void xtensa_cpu_do_interrupt(CPUState *cs)
 {
+    XtensaCPU *cpu = XTENSA_CPU(cs);
+    CPUXtensaState *env = &cpu->env;
+
     if (env->exception_index == EXC_IRQ) {
         qemu_log_mask(CPU_LOG_INT,
                 "%s(EXC_IRQ) level = %d, cintlevel = %d, "
@@ -390,6 +402,7 @@ int xtensa_tlb_lookup(const CPUXtensaState *env, uint32_t addr, bool dtlb,
 static unsigned mmu_attr_to_access(uint32_t attr)
 {
     unsigned access = 0;
+
     if (attr < 12) {
         access |= PAGE_READ;
         if (attr & 0x1) {
@@ -398,8 +411,22 @@ static unsigned mmu_attr_to_access(uint32_t attr)
         if (attr & 0x2) {
             access |= PAGE_WRITE;
         }
+
+        switch (attr & 0xc) {
+        case 0:
+            access |= PAGE_CACHE_BYPASS;
+            break;
+
+        case 4:
+            access |= PAGE_CACHE_WB;
+            break;
+
+        case 8:
+            access |= PAGE_CACHE_WT;
+            break;
+        }
     } else if (attr == 13) {
-        access |= PAGE_READ | PAGE_WRITE;
+        access |= PAGE_READ | PAGE_WRITE | PAGE_CACHE_ISOLATE;
     }
     return access;
 }
@@ -410,14 +437,35 @@ static unsigned mmu_attr_to_access(uint32_t attr)
  */
 static unsigned region_attr_to_access(uint32_t attr)
 {
-    unsigned access = 0;
-    if ((attr < 6 && attr != 3) || attr == 14) {
-        access |= PAGE_READ | PAGE_WRITE;
-    }
-    if (attr > 0 && attr < 6) {
-        access |= PAGE_EXEC;
-    }
-    return access;
+    static const unsigned access[16] = {
+         [0] = PAGE_READ | PAGE_WRITE             | PAGE_CACHE_WT,
+         [1] = PAGE_READ | PAGE_WRITE | PAGE_EXEC | PAGE_CACHE_WT,
+         [2] = PAGE_READ | PAGE_WRITE | PAGE_EXEC | PAGE_CACHE_BYPASS,
+         [3] =                          PAGE_EXEC | PAGE_CACHE_WB,
+         [4] = PAGE_READ | PAGE_WRITE | PAGE_EXEC | PAGE_CACHE_WB,
+         [5] = PAGE_READ | PAGE_WRITE | PAGE_EXEC | PAGE_CACHE_WB,
+        [14] = PAGE_READ | PAGE_WRITE             | PAGE_CACHE_ISOLATE,
+    };
+
+    return access[attr & 0xf];
+}
+
+/*!
+ * Convert cacheattr to PAGE_{READ,WRITE,EXEC} mask.
+ * See ISA, A.2.14 The Cache Attribute Register
+ */
+static unsigned cacheattr_attr_to_access(uint32_t attr)
+{
+    static const unsigned access[16] = {
+         [0] = PAGE_READ | PAGE_WRITE             | PAGE_CACHE_WT,
+         [1] = PAGE_READ | PAGE_WRITE | PAGE_EXEC | PAGE_CACHE_WT,
+         [2] = PAGE_READ | PAGE_WRITE | PAGE_EXEC | PAGE_CACHE_BYPASS,
+         [3] =                          PAGE_EXEC | PAGE_CACHE_WB,
+         [4] = PAGE_READ | PAGE_WRITE | PAGE_EXEC | PAGE_CACHE_WB,
+        [14] = PAGE_READ | PAGE_WRITE             | PAGE_CACHE_ISOLATE,
+    };
+
+    return access[attr & 0xf];
 }
 
 static bool is_access_granted(unsigned access, int is_write)
@@ -567,7 +615,8 @@ int xtensa_get_physical_addr(CPUXtensaState *env, bool update_tlb,
     } else {
         *paddr = vaddr;
         *page_size = TARGET_PAGE_SIZE;
-        *access = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
+        *access = cacheattr_attr_to_access(
+                env->sregs[CACHEATTR] >> ((vaddr & 0xe0000000) >> 27));
         return 0;
     }
 }
@@ -600,24 +649,34 @@ static void dump_tlb(FILE *f, fprintf_function cpu_fprintf,
                 xtensa_tlb_get_entry(env, dtlb, wi, ei);
 
             if (entry->asid) {
+                static const char * const cache_text[8] = {
+                    [PAGE_CACHE_BYPASS >> PAGE_CACHE_SHIFT] = "Bypass",
+                    [PAGE_CACHE_WT >> PAGE_CACHE_SHIFT] = "WT",
+                    [PAGE_CACHE_WB >> PAGE_CACHE_SHIFT] = "WB",
+                    [PAGE_CACHE_ISOLATE >> PAGE_CACHE_SHIFT] = "Isolate",
+                };
                 unsigned access = attr_to_access(entry->attr);
+                unsigned cache_idx = (access & PAGE_CACHE_MASK) >>
+                    PAGE_CACHE_SHIFT;
 
                 if (print_header) {
                     print_header = false;
                     cpu_fprintf(f, "Way %u (%d %s)\n", wi, sz, sz_text);
                     cpu_fprintf(f,
-                            "\tVaddr       Paddr       ASID  Attr RWX\n"
-                            "\t----------  ----------  ----  ---- ---\n");
+                            "\tVaddr       Paddr       ASID  Attr RWX Cache\n"
+                            "\t----------  ----------  ----  ---- --- -------\n");
                 }
                 cpu_fprintf(f,
-                        "\t0x%08x  0x%08x  0x%02x  0x%02x %c%c%c\n",
+                        "\t0x%08x  0x%08x  0x%02x  0x%02x %c%c%c %-7s\n",
                         entry->vaddr,
                         entry->paddr,
                         entry->asid,
                         entry->attr,
                         (access & PAGE_READ) ? 'R' : '-',
                         (access & PAGE_WRITE) ? 'W' : '-',
-                        (access & PAGE_EXEC) ? 'X' : '-');
+                        (access & PAGE_EXEC) ? 'X' : '-',
+                        cache_text[cache_idx] ? cache_text[cache_idx] :
+                            "Invalid");
             }
         }
     }

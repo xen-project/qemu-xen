@@ -9,10 +9,10 @@
  */
 
 #include "qemu-common.h"
-#include "qemu-error.h"
+#include "qemu/error-report.h"
 #include "hw/usb.h"
 #include "hw/usb/desc.h"
-#include "qemu-char.h"
+#include "sysemu/char.h"
 
 //#define DEBUG_Serial
 
@@ -410,13 +410,6 @@ static void usb_serial_handle_data(USBDevice *dev, USBPacket *p)
     }
 }
 
-static void usb_serial_handle_destroy(USBDevice *dev)
-{
-    USBSerialState *s = (USBSerialState *)dev;
-
-    qemu_chr_add_handlers(s->cs, NULL, NULL, NULL, NULL);
-}
-
 static int usb_serial_can_read(void *opaque)
 {
     USBSerialState *s = opaque;
@@ -495,7 +488,7 @@ static int usb_serial_initfn(USBDevice *dev)
                           usb_serial_event, s);
     usb_serial_handle_reset(dev);
 
-    if (s->cs->opened && !dev->attached) {
+    if (s->cs->be_open && !dev->attached) {
         usb_device_attach(dev);
     }
     return 0;
@@ -595,12 +588,12 @@ static void usb_serial_class_initfn(ObjectClass *klass, void *data)
     uc->handle_reset   = usb_serial_handle_reset;
     uc->handle_control = usb_serial_handle_control;
     uc->handle_data    = usb_serial_handle_data;
-    uc->handle_destroy = usb_serial_handle_destroy;
     dc->vmsd = &vmstate_usb_serial;
     dc->props = serial_properties;
+    set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
 }
 
-static TypeInfo serial_info = {
+static const TypeInfo serial_info = {
     .name          = "usb-serial",
     .parent        = TYPE_USB_DEVICE,
     .instance_size = sizeof(USBSerialState),
@@ -623,12 +616,12 @@ static void usb_braille_class_initfn(ObjectClass *klass, void *data)
     uc->handle_reset   = usb_serial_handle_reset;
     uc->handle_control = usb_serial_handle_control;
     uc->handle_data    = usb_serial_handle_data;
-    uc->handle_destroy = usb_serial_handle_destroy;
     dc->vmsd = &vmstate_usb_serial;
     dc->props = braille_properties;
+    set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
 }
 
-static TypeInfo braille_info = {
+static const TypeInfo braille_info = {
     .name          = "usb-braille",
     .parent        = TYPE_USB_DEVICE,
     .instance_size = sizeof(USBSerialState),

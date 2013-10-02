@@ -10,9 +10,9 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include "qemu/rng.h"
-#include "qemu-char.h"
-#include "qerror.h"
+#include "sysemu/rng.h"
+#include "sysemu/char.h"
+#include "qapi/qmp/qerror.h"
 #include "hw/qdev.h" /* just for DEFINE_PROP_CHR */
 
 #define TYPE_RNG_EGD "rng-egd"
@@ -149,6 +149,11 @@ static void rng_egd_opened(RngBackend *b, Error **errp)
         return;
     }
 
+    if (qemu_chr_fe_claim(s->chr) != 0) {
+        error_set(errp, QERR_DEVICE_IN_USE, s->chr_name);
+        return;
+    }
+
     /* FIXME we should resubmit pending requests when the CDS reconnects. */
     qemu_chr_add_handlers(s->chr, rng_egd_chr_can_read, rng_egd_chr_read,
                           NULL, s);
@@ -191,6 +196,7 @@ static void rng_egd_finalize(Object *obj)
 
     if (s->chr) {
         qemu_chr_add_handlers(s->chr, NULL, NULL, NULL, NULL);
+        qemu_chr_fe_release(s->chr);
     }
 
     g_free(s->chr_name);
@@ -207,7 +213,7 @@ static void rng_egd_class_init(ObjectClass *klass, void *data)
     rbc->opened = rng_egd_opened;
 }
 
-static TypeInfo rng_egd_info = {
+static const TypeInfo rng_egd_info = {
     .name = TYPE_RNG_EGD,
     .parent = TYPE_RNG_BACKEND,
     .instance_size = sizeof(RngEgd),

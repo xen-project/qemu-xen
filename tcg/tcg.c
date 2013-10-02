@@ -37,9 +37,9 @@
 #endif
 
 #include "qemu-common.h"
-#include "cache-utils.h"
-#include "host-utils.h"
-#include "qemu-timer.h"
+#include "qemu/cache-utils.h"
+#include "qemu/host-utils.h"
+#include "qemu/timer.h"
 
 /* Note: the long term plan is to reduce the dependancies on the QEMU
    CPU definitions. Currently they are used for qemu_ld/st
@@ -67,6 +67,24 @@ static void tcg_target_init(TCGContext *s);
 static void tcg_target_qemu_prologue(TCGContext *s);
 static void patch_reloc(uint8_t *code_ptr, int type, 
                         tcg_target_long value, tcg_target_long addend);
+
+/* The CIE and FDE header definitions will be common to all hosts.  */
+typedef struct {
+    uint32_t len __attribute__((aligned((sizeof(void *)))));
+    uint32_t id;
+    uint8_t version;
+    char augmentation[1];
+    uint8_t code_align;
+    uint8_t data_align;
+    uint8_t return_column;
+} DebugFrameCIE;
+
+typedef struct QEMU_PACKED {
+    uint32_t len __attribute__((aligned((sizeof(void *)))));
+    uint32_t cie_offset;
+    tcg_target_long func_start;
+    tcg_target_long func_len;
+} DebugFrameFDEHeader;
 
 static void tcg_register_jit_int(void *buf, size_t size,
                                  void *debug_frame, size_t debug_frame_size)
@@ -263,11 +281,21 @@ void tcg_context_init(TCGContext *s)
 void tcg_prologue_init(TCGContext *s)
 {
     /* init global prologue and epilogue */
-    s->code_buf = code_gen_prologue;
+    s->code_buf = s->code_gen_prologue;
     s->code_ptr = s->code_buf;
     tcg_target_qemu_prologue(s);
     flush_icache_range((tcg_target_ulong)s->code_buf,
                        (tcg_target_ulong)s->code_ptr);
+
+#ifdef DEBUG_DISAS
+    if (qemu_loglevel_mask(CPU_LOG_TB_OUT_ASM)) {
+        size_t size = s->code_ptr - s->code_buf;
+        qemu_log("PROLOGUE: [size=%zu]\n", size);
+        log_disas(s->code_buf, size);
+        qemu_log("\n");
+        qemu_log_flush();
+    }
+#endif
 }
 
 void tcg_set_frame(TCGContext *s, int reg,
@@ -800,7 +828,6 @@ static char *tcg_get_arg_str_idx(TCGContext *s, char *buf, int buf_size,
 
     assert(idx >= 0 && idx < s->nb_temps);
     ts = &s->temps[idx];
-    assert(ts);
     if (idx < s->nb_globals) {
         pstrcpy(buf, buf_size, ts->name);
     } else {
@@ -1151,9 +1178,7 @@ void tcg_add_target_add_op_defs(const TCGTargetOpDef *tdefs)
     i = 0;
     for (op = 0; op < ARRAY_SIZE(tcg_op_defs); op++) {
         const TCGOpDef *def = &tcg_op_defs[op];
-        if (op < INDEX_op_call
-            || op == INDEX_op_debug_insn_start
-            || (def->flags & TCG_OPF_NOT_PRESENT)) {
+        if (def->flags & TCG_OPF_NOT_PRESENT) {
             /* Wrong entry in op definitions? */
             if (def->used) {
                 fprintf(stderr, "Invalid op definition for %s\n", def->name);
@@ -1218,7 +1243,7 @@ static inline void tcg_la_bb_end(TCGContext *s, uint8_t *dead_temps,
 static void tcg_liveness_analysis(TCGContext *s)
 {
     int i, op_index, nb_args, nb_iargs, nb_oargs, arg, nb_ops;
-    TCGOpcode op;
+    TCGOpcode op, op_new;
     TCGArg *args;
     const TCGOpDef *def;
     uint8_t *dead_temps, *mem_temps;
@@ -1325,7 +1350,17 @@ static void tcg_liveness_analysis(TCGContext *s)
             break;
 
         case INDEX_op_add2_i32:
+            op_new = INDEX_op_add_i32;
+            goto do_addsub2;
         case INDEX_op_sub2_i32:
+            op_new = INDEX_op_sub_i32;
+            goto do_addsub2;
+        case INDEX_op_add2_i64:
+            op_new = INDEX_op_add_i64;
+            goto do_addsub2;
+        case INDEX_op_sub2_i64:
+            op_new = INDEX_op_sub_i64;
+        do_addsub2:
             args -= 6;
             nb_iargs = 4;
             nb_oargs = 2;
@@ -1338,12 +1373,7 @@ static void tcg_liveness_analysis(TCGContext *s)
                     goto do_remove;
                 }
                 /* Create the single operation plus nop.  */
-                if (op == INDEX_op_add2_i32) {
-                    op = INDEX_op_add_i32;
-                } else {
-                    op = INDEX_op_sub_i32;
-                }
-                s->gen_opc_buf[op_index] = op;
+                s->gen_opc_buf[op_index] = op = op_new;
                 args[1] = args[2];
                 args[2] = args[4];
                 assert(s->gen_opc_buf[op_index + 1] == INDEX_op_nop);
@@ -1355,6 +1385,13 @@ static void tcg_liveness_analysis(TCGContext *s)
             goto do_not_remove;
 
         case INDEX_op_mulu2_i32:
+        case INDEX_op_muls2_i32:
+            op_new = INDEX_op_mul_i32;
+            goto do_mul2;
+        case INDEX_op_mulu2_i64:
+        case INDEX_op_muls2_i64:
+            op_new = INDEX_op_mul_i64;
+        do_mul2:
             args -= 4;
             nb_iargs = 2;
             nb_oargs = 2;
@@ -1363,7 +1400,7 @@ static void tcg_liveness_analysis(TCGContext *s)
                 if (dead_temps[args[0]] && !mem_temps[args[0]]) {
                     goto do_remove;
                 }
-                s->gen_opc_buf[op_index] = op = INDEX_op_mul_i32;
+                s->gen_opc_buf[op_index] = op = op_new;
                 args[1] = args[2];
                 args[2] = args[3];
                 assert(s->gen_opc_buf[op_index + 1] == INDEX_op_nop);
@@ -2638,9 +2675,9 @@ static void tcg_register_jit_int(void *buf_ptr, size_t buf_size,
     img->sym[1].st_size = buf_size;
 
     img->di.cu_low_pc = buf;
-    img->di.cu_high_pc = buf_size;
+    img->di.cu_high_pc = buf + buf_size;
     img->di.fn_low_pc = buf;
-    img->di.fn_high_pc = buf_size;
+    img->di.fn_high_pc = buf + buf_size;
 
 #ifdef DEBUG_JIT
     /* Enable this block to be able to debug the ELF image file creation.
