@@ -2111,14 +2111,6 @@ static void x86_cpu_initfn(Object *obj)
     }
 }
 
-static int64_t x86_cpu_get_arch_id(CPUState *cs)
-{
-    X86CPU *cpu = X86_CPU(cs);
-    CPUX86State *env = &cpu->env;
-
-    return env->cpuid_apic_id;
-}
-
 static void x86_cpu_common_class_init(ObjectClass *oc, void *data)
 {
     X86CPUClass *xcc = X86_CPU_CLASS(oc);
@@ -2126,8 +2118,6 @@ static void x86_cpu_common_class_init(ObjectClass *oc, void *data)
 
     xcc->parent_reset = cc->reset;
     cc->reset = x86_cpu_reset;
-
-    cc->get_arch_id = x86_cpu_get_arch_id;
 }
 
 static const TypeInfo x86_cpu_type_info = {

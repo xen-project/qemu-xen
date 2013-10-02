@@ -34,19 +34,11 @@ static void cpu_common_reset(CPUState *cpu)
 {
 }
 
-static int64_t cpu_common_get_arch_id(CPUState *cpu)
-{
-    /* Not used in Xen, so no backport.
-     * There is a missing cpu_index field in CPUState. */
-    abort();
-}
-
 static void cpu_class_init(ObjectClass *klass, void *data)
 {
     CPUClass *k = CPU_CLASS(klass);
 
     k->reset = cpu_common_reset;
-    k->get_arch_id = cpu_common_get_arch_id;
 }
 
 static TypeInfo cpu_type_info = {
