@@ -869,7 +869,7 @@ static void mem_add(MemoryListener *listener, MemoryRegionSection *section)
         now = remain;
         if (int128_lt(remain.size, page_size)) {
             register_subpage(d, &now);
-        } else if (remain.offset_within_region & ~TARGET_PAGE_MASK) {
+        } else if (remain.offset_within_address_space & ~TARGET_PAGE_MASK) {
             now.size = page_size;
             register_subpage(d, &now);
         } else {
@@ -1172,6 +1172,7 @@ ram_addr_t qemu_ram_alloc_from_ptr(ram_addr_t size, void *host,
 
     qemu_ram_setup_dump(new_block->host, size);
     qemu_madvise(new_block->host, size, QEMU_MADV_HUGEPAGE);
+    qemu_madvise(new_block->host, size, QEMU_MADV_DONTFORK);
 
     if (kvm_enabled())
         kvm_setup_guest_memory(new_block->host, size);
@@ -1820,7 +1821,8 @@ static void memory_map_init(void)
     address_space_init(&address_space_memory, system_memory, "memory");
 
     system_io = g_malloc(sizeof(*system_io));
-    memory_region_init(system_io, NULL, "io", 65536);
+    memory_region_init_io(system_io, NULL, &unassigned_io_ops, NULL, "io",
+                          65536);
     address_space_init(&address_space_io, system_io, "I/O");
 
     memory_listener_register(&core_memory_listener, &address_space_memory);
@@ -1927,6 +1929,9 @@ static int memory_access_size(MemoryRegion *mr, unsigned l, hwaddr addr)
     /* Don't attempt accesses larger than the maximum.  */
     if (l > access_size_max) {
         l = access_size_max;
+    }
+    if (l & (l - 1)) {
+        l = 1 << (qemu_fls(l) - 1);
     }
 
     return l;
