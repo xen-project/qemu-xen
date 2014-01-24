@@ -258,14 +258,6 @@ int e820_add_entry(uint64_t, uint64_t, uint32_t);
             .driver = TYPE_X86_CPU,\
             .property = "pmu",\
             .value = "on",\
-        },{\
-            .driver   = "i440FX-pcihost",\
-            .property = "short_root_bus",\
-            .value    = stringify(0),\
-        },{\
-            .driver   = "q35-pcihost",\
-            .property = "short_root_bus",\
-            .value    = stringify(0),\
         }
 
 #define PC_COMPAT_1_4 \
