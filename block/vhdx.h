@@ -18,6 +18,11 @@
 #ifndef BLOCK_VHDX_H
 #define BLOCK_VHDX_H
 
+#define KiB              (1 * 1024)
+#define MiB            (KiB * 1024)
+#define GiB            (MiB * 1024)
+#define TiB ((uint64_t) GiB * 1024)
+
 /* Structures and fields present in the VHDX file */
 
 /* The header section has the following blocks,
@@ -262,6 +267,8 @@ typedef struct QEMU_PACKED VHDXMetadataTableEntry {
                                                    If set indicates a fixed
                                                    size VHDX file */
 #define VHDX_PARAMS_HAS_PARENT           0x02    /* has parent / backing file */
+#define VHDX_BLOCK_SIZE_MIN             (1   * MiB)
+#define VHDX_BLOCK_SIZE_MAX             (256 * MiB)
 typedef struct QEMU_PACKED VHDXFileParameters {
     uint32_t    block_size;             /* size of each payload block, always
                                            power of 2, <= 256MB and >= 1MB. */
