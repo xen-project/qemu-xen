@@ -303,7 +303,7 @@ void monitor_flush(Monitor *mon)
             mon->outbuf = tmp;
         }
         if (mon->watch == 0) {
-            mon->watch = qemu_chr_fe_add_watch(mon->chr, G_IO_OUT,
+            mon->watch = qemu_chr_fe_add_watch(mon->chr, G_IO_OUT|G_IO_HUP,
                                                monitor_unblocked, mon);
         }
     }
