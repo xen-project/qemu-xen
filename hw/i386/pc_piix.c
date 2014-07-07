@@ -179,6 +179,13 @@ static void pc_init1(QEMUMachineInitArgs *args,
                        args->initrd_filename,
                        below_4g_mem_size, above_4g_mem_size,
                        rom_memory, &ram_memory, guest_info);
+    } else if (args->kernel_filename != NULL) {
+        /* For xen HVM direct kernel boot, load linux here */
+        fw_cfg = xen_load_linux(args->kernel_filename,
+                                args->kernel_cmdline,
+                                args->initrd_filename,
+                                below_4g_mem_size,
+                                guest_info);
     }
 
     gsi_state = g_malloc0(sizeof(*gsi_state));
