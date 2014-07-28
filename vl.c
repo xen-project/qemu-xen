@@ -212,6 +212,7 @@ static NotifierList machine_init_done_notifiers =
 
 static bool tcg_allowed = true;
 bool xen_allowed;
+uint64_t max_ram_below_4g = 1ULL << 32; /* 4G */
 uint32_t xen_domid;
 enum xen_mode xen_mode = XEN_EMULATE;
 static int tcg_tb_size;
@@ -382,6 +383,10 @@ static QemuOptsList qemu_machine_opts = {
             .name = "kvm-type",
             .type = QEMU_OPT_STRING,
             .help = "Specifies the KVM virtualization mode (HV, PR)",
+        },{
+            .name = "max-ram-below-4g",
+            .type = QEMU_OPT_SIZE,
+            .help = "maximum ram below the 4G boundary (32bit boundary)",
         },
         { /* End of list */ }
     },
@@ -4181,6 +4186,29 @@ int main(int argc, char **argv, char **envp)
     initrd_filename = qemu_opt_get(machine_opts, "initrd");
     kernel_cmdline = qemu_opt_get(machine_opts, "append");
     bios_name = qemu_opt_get(machine_opts, "firmware");
+
+    max_ram_below_4g = qemu_opt_get_size(machine_opts,
+                                         "max-ram-below-4g",
+                                         max_ram_below_4g);
+
+    if (max_ram_below_4g > (1ULL << 32)) {
+        Error *local_err = NULL;
+        error_set(&local_err, ERROR_CLASS_GENERIC_ERROR,
+                  "Machine option 'max-ram-below-4g=%"PRIu64
+                  "' expects size less than or equal to 4G",
+                  max_ram_below_4g);
+        if (local_err) {
+            error_report("%s", error_get_pretty(local_err));
+            error_free(local_err);
+            exit(1);
+        }
+    }
+
+    if (max_ram_below_4g < (1ULL << 20)) {
+        error_report("Warning: small max_ram_below_4g(%"PRIu64
+                     ") less than 1M.  BIOS may not work..",
+                     max_ram_below_4g);
+    }
 
     boot_order = machine->default_boot_order;
     opts = qemu_opts_find(qemu_find_opts("boot-opts"), NULL);
