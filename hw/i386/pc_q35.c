@@ -83,20 +83,6 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
     DeviceState *icc_bridge;
     PcGuestInfo *guest_info;
 
-    if (xen_enabled() && xen_hvm_init(&ram_memory) != 0) {
-        fprintf(stderr, "xen hardware virtual machine initialisation failed\n");
-        exit(1);
-    }
-
-    icc_bridge = qdev_create(NULL, TYPE_ICC_BRIDGE);
-    object_property_add_child(qdev_get_machine(), "icc-bridge",
-                              OBJECT(icc_bridge), NULL);
-
-    pc_cpus_init(args->cpu_model, icc_bridge);
-    pc_acpi_init("q35-acpi-dsdt.aml");
-
-    kvmclock_create();
-
     /* Check whether RAM fits below 4G (leaving 1/2 GByte for IO memory
      * and 256 Mbytes for PCI Express Enhanced Configuration Access Mapping
      * also known as MMCFG).
@@ -114,6 +100,21 @@ static void pc_q35_init(QEMUMachineInitArgs *args)
         above_4g_mem_size = 0;
         below_4g_mem_size = args->ram_size;
     }
+
+    if (xen_enabled() && xen_hvm_init(&below_4g_mem_size, &above_4g_mem_size,
+                                      &ram_memory) != 0) {
+        fprintf(stderr, "xen hardware virtual machine initialisation failed\n");
+        exit(1);
+    }
+
+    icc_bridge = qdev_create(NULL, TYPE_ICC_BRIDGE);
+    object_property_add_child(qdev_get_machine(), "icc-bridge",
+                              OBJECT(icc_bridge), NULL);
+
+    pc_cpus_init(args->cpu_model, icc_bridge);
+    pc_acpi_init("q35-acpi-dsdt.aml");
+
+    kvmclock_create();
 
     /* pci enabled */
     if (pci_enabled) {
