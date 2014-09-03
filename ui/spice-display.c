@@ -229,9 +229,23 @@ void qemu_spice_create_host_memslot(SimpleSpiceDisplay *ssd)
 void qemu_spice_create_host_primary(SimpleSpiceDisplay *ssd)
 {
     QXLDevSurfaceCreate surface;
+    uint64_t surface_size;
 
-    dprint(1, "%s: %dx%d\n", __FUNCTION__,
-           ds_get_width(ssd->ds), ds_get_height(ssd->ds));
+    memset(&surface, 0, sizeof(surface));
+
+    surface_size = (uint64_t) surface_width(ssd->ds) *
+        surface_height(ssd->ds) * 4;
+    assert(surface_size > 0);
+    assert(surface_size < INT_MAX);
+    if (ssd->bufsize < surface_size) {
+        ssd->bufsize = surface_size;
+        g_free(ssd->buf);
+        ssd->buf = g_malloc(ssd->bufsize);
+    }
+
+    dprint(1, "%s/%d: %ux%u (size %" PRIu64 "/%d)\n", __func__, ssd->qxl.id,
+           surface_width(ssd->ds), surface_height(ssd->ds),
+           surface_size, ssd->bufsize);
 
     surface.format     = SPICE_SURFACE_FMT_32_xRGB;
     surface.width      = ds_get_width(ssd->ds);
@@ -273,8 +287,6 @@ void qemu_spice_display_init_common(SimpleSpiceDisplay *ssd, DisplayState *ds)
     qemu_mutex_init(&ssd->lock);
     ssd->mouse_x = -1;
     ssd->mouse_y = -1;
-    ssd->bufsize = (16 * 1024 * 1024);
-    ssd->buf = g_malloc(ssd->bufsize);
 }
 
 /* display listener callbacks */
@@ -377,7 +389,7 @@ static void interface_get_init_info(QXLInstance *sin, QXLDevInitInfo *info)
     info->num_memslots = NUM_MEMSLOTS;
     info->num_memslots_groups = NUM_MEMSLOTS_GROUPS;
     info->internal_groupslot_id = 0;
-    info->qxl_ram_size = ssd->bufsize;
+    info->qxl_ram_size = 16 * 1024 * 1024;
     info->n_surfaces = NUM_SURFACES;
 }
 
