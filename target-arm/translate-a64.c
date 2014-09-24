@@ -1432,8 +1432,10 @@ static void disas_uncond_b_reg(DisasContext *s, uint32_t insn)
     switch (opc) {
     case 0: /* BR */
     case 2: /* RET */
+        tcg_gen_mov_i64(cpu_pc, cpu_reg(s, rn));
         break;
     case 1: /* BLR */
+        tcg_gen_mov_i64(cpu_pc, cpu_reg(s, rn));
         tcg_gen_movi_i64(cpu_reg(s, 30), s->pc);
         break;
     case 4: /* ERET */
@@ -1449,7 +1451,6 @@ static void disas_uncond_b_reg(DisasContext *s, uint32_t insn)
         return;
     }
 
-    tcg_gen_mov_i64(cpu_pc, cpu_reg(s, rn));
     s->is_jmp = DISAS_JUMP;
 }
 
@@ -7455,7 +7456,7 @@ static void disas_simd_scalar_two_reg_misc(DisasContext *s, uint32_t insn)
         }
         break;
     case 0x12: /* SQXTUN */
-        if (u) {
+        if (!u) {
             unallocated_encoding(s);
             return;
         }

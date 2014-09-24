@@ -100,6 +100,7 @@ enum VMStateFlags {
     VMS_MULTIPLY         = 0x200,  /* multiply "size" field by field_size */
     VMS_VARRAY_UINT8     = 0x400,  /* Array with size in uint8_t field*/
     VMS_VARRAY_UINT32    = 0x800,  /* Array with size in uint32_t field*/
+    VMS_MUST_EXIST       = 0x1000, /* Field must exist in input */
 };
 
 typedef struct {
@@ -201,6 +202,14 @@ extern const VMStateInfo vmstate_info_bitmap;
     .info         = &(_info),                                        \
     .flags        = VMS_SINGLE,                                      \
     .offset       = vmstate_offset_value(_state, _field, _type),     \
+}
+
+/* Validate state using a boolean predicate. */
+#define VMSTATE_VALIDATE(_name, _test) { \
+    .name         = (_name),                                         \
+    .field_exists = (_test),                                         \
+    .flags        = VMS_ARRAY | VMS_MUST_EXIST,                      \
+    .num          = 0, /* 0 elements: no data, only run _test */     \
 }
 
 #define VMSTATE_POINTER(_field, _state, _version, _info, _type) {    \

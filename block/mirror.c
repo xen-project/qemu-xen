@@ -259,9 +259,11 @@ static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
     next_sector = sector_num;
     while (nb_chunks-- > 0) {
         MirrorBuffer *buf = QSIMPLEQ_FIRST(&s->buf_free);
+        size_t remaining = (nb_sectors * BDRV_SECTOR_SIZE) - op->qiov.size;
+
         QSIMPLEQ_REMOVE_HEAD(&s->buf_free, next);
         s->buf_free_count--;
-        qemu_iovec_add(&op->qiov, buf, s->granularity);
+        qemu_iovec_add(&op->qiov, buf, MIN(s->granularity, remaining));
 
         /* Advance the HBitmapIter in parallel, so that we do not examine
          * the same sector twice.
@@ -324,9 +326,18 @@ static void coroutine_fn mirror_run(void *opaque)
     }
 
     s->common.len = bdrv_getlength(bs);
-    if (s->common.len <= 0) {
-        block_job_completed(&s->common, s->common.len);
-        return;
+    if (s->common.len < 0) {
+        ret = s->common.len;
+        goto immediate_exit;
+    } else if (s->common.len == 0) {
+        /* Report BLOCK_JOB_READY and wait for complete. */
+        block_job_ready(&s->common);
+        s->synced = true;
+        while (!block_job_is_cancelled(&s->common) && !s->should_complete) {
+            block_job_yield(&s->common);
+        }
+        s->common.cancelled = false;
+        goto immediate_exit;
     }
 
     length = (bdrv_getlength(bs) + s->granularity - 1) / s->granularity;

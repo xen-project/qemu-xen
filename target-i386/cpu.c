@@ -566,15 +566,23 @@ struct X86CPUDefinition {
           CPUID_EXT_X2APIC, CPUID_EXT_TSC_DEADLINE_TIMER, CPUID_EXT_XSAVE,
           CPUID_EXT_OSXSAVE, CPUID_EXT_AVX, CPUID_EXT_F16C,
           CPUID_EXT_RDRAND */
+
+#ifdef TARGET_X86_64
+#define TCG_EXT2_X86_64_FEATURES (CPUID_EXT2_SYSCALL | CPUID_EXT2_LM)
+#else
+#define TCG_EXT2_X86_64_FEATURES 0
+#endif
+
 #define TCG_EXT2_FEATURES ((TCG_FEATURES & CPUID_EXT2_AMD_ALIASES) | \
           CPUID_EXT2_NX | CPUID_EXT2_MMXEXT | CPUID_EXT2_RDTSCP | \
-          CPUID_EXT2_3DNOW | CPUID_EXT2_3DNOWEXT)
+          CPUID_EXT2_3DNOW | CPUID_EXT2_3DNOWEXT | \
+          TCG_EXT2_X86_64_FEATURES)
           /* missing:
           CPUID_EXT2_PDPE1GB */
 #define TCG_EXT3_FEATURES (CPUID_EXT3_LAHF_LM | CPUID_EXT3_SVM | \
           CPUID_EXT3_CR8LEG | CPUID_EXT3_ABM | CPUID_EXT3_SSE4A)
 #define TCG_SVM_FEATURES 0
-#define TCG_7_0_EBX_FEATURES (CPUID_7_0_EBX_SMEP | CPUID_7_0_EBX_SMAP \
+#define TCG_7_0_EBX_FEATURES (CPUID_7_0_EBX_SMEP | CPUID_7_0_EBX_SMAP | \
           CPUID_7_0_EBX_BMI1 | CPUID_7_0_EBX_BMI2 | CPUID_7_0_EBX_ADX)
           /* missing:
           CPUID_7_0_EBX_FSGSBASE, CPUID_7_0_EBX_HLE, CPUID_7_0_EBX_AVX2,
@@ -2476,8 +2484,7 @@ static void x86_cpu_reset(CPUState *s)
     cpu_breakpoint_remove_all(s, BP_CPU);
     cpu_watchpoint_remove_all(s, BP_CPU);
 
-    env->tsc_adjust = 0;
-    env->tsc = 0;
+    env->xcr0 = 1;
 
 #if !defined(CONFIG_USER_ONLY)
     /* We hard-wire the BSP to the first CPU. */
@@ -2591,11 +2598,8 @@ static void x86_cpu_realizefn(DeviceState *dev, Error **errp)
     if (!kvm_enabled()) {
         env->features[FEAT_1_EDX] &= TCG_FEATURES;
         env->features[FEAT_1_ECX] &= TCG_EXT_FEATURES;
-        env->features[FEAT_8000_0001_EDX] &= (TCG_EXT2_FEATURES
-#ifdef TARGET_X86_64
-            | CPUID_EXT2_SYSCALL | CPUID_EXT2_LM
-#endif
-            );
+        env->features[FEAT_7_0_EBX] &= TCG_7_0_EBX_FEATURES;
+        env->features[FEAT_8000_0001_EDX] &= TCG_EXT2_FEATURES;
         env->features[FEAT_8000_0001_ECX] &= TCG_EXT3_FEATURES;
         env->features[FEAT_SVM] &= TCG_SVM_FEATURES;
     } else {

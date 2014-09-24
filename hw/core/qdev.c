@@ -174,14 +174,14 @@ int qdev_init(DeviceState *dev)
     return 0;
 }
 
-static void device_realize(DeviceState *dev, Error **err)
+static void device_realize(DeviceState *dev, Error **errp)
 {
     DeviceClass *dc = DEVICE_GET_CLASS(dev);
 
     if (dc->init) {
         int rc = dc->init(dev);
         if (rc < 0) {
-            error_setg(err, "Device initialization failed.");
+            error_setg(errp, "Device initialization failed.");
             return;
         }
     }
@@ -504,43 +504,46 @@ static void bus_unparent(Object *obj)
     }
 }
 
-static bool bus_get_realized(Object *obj, Error **err)
+static bool bus_get_realized(Object *obj, Error **errp)
 {
     BusState *bus = BUS(obj);
 
     return bus->realized;
 }
 
-static void bus_set_realized(Object *obj, bool value, Error **err)
+static void bus_set_realized(Object *obj, bool value, Error **errp)
 {
     BusState *bus = BUS(obj);
     BusClass *bc = BUS_GET_CLASS(bus);
+    BusChild *kid;
     Error *local_err = NULL;
 
     if (value && !bus->realized) {
         if (bc->realize) {
             bc->realize(bus, &local_err);
-
-            if (local_err != NULL) {
-                goto error;
-            }
-
         }
-    } else if (!value && bus->realized) {
-        if (bc->unrealize) {
-            bc->unrealize(bus, &local_err);
 
+        /* TODO: recursive realization */
+    } else if (!value && bus->realized) {
+        QTAILQ_FOREACH(kid, &bus->children, sibling) {
+            DeviceState *dev = kid->child;
+            object_property_set_bool(OBJECT(dev), false, "realized",
+                                     &local_err);
             if (local_err != NULL) {
-                goto error;
+                break;
             }
+        }
+        if (bc->unrealize && local_err == NULL) {
+            bc->unrealize(bus, &local_err);
         }
     }
 
-    bus->realized = value;
-    return;
+    if (local_err != NULL) {
+        error_propagate(errp, local_err);
+        return;
+    }
 
-error:
-    error_propagate(err, local_err);
+    bus->realized = value;
 }
 
 void qbus_create_inplace(void *bus, size_t size, const char *typename,
@@ -724,13 +727,13 @@ void qdev_property_add_static(DeviceState *dev, Property *prop,
     }
 }
 
-static bool device_get_realized(Object *obj, Error **err)
+static bool device_get_realized(Object *obj, Error **errp)
 {
     DeviceState *dev = DEVICE(obj);
     return dev->realized;
 }
 
-static void device_set_realized(Object *obj, bool value, Error **err)
+static void device_set_realized(Object *obj, bool value, Error **errp)
 {
     DeviceState *dev = DEVICE(obj);
     DeviceClass *dc = DEVICE_GET_CLASS(dev);
@@ -738,7 +741,7 @@ static void device_set_realized(Object *obj, bool value, Error **err)
     Error *local_err = NULL;
 
     if (dev->hotplugged && !dc->hotpluggable) {
-        error_set(err, QERR_DEVICE_NO_HOTPLUG, object_get_typename(obj));
+        error_set(errp, QERR_DEVICE_NO_HOTPLUG, object_get_typename(obj));
         return;
     }
 
@@ -797,14 +800,14 @@ static void device_set_realized(Object *obj, bool value, Error **err)
     }
 
     if (local_err != NULL) {
-        error_propagate(err, local_err);
+        error_propagate(errp, local_err);
         return;
     }
 
     dev->realized = value;
 }
 
-static bool device_get_hotpluggable(Object *obj, Error **err)
+static bool device_get_hotpluggable(Object *obj, Error **errp)
 {
     DeviceClass *dc = DEVICE_GET_CLASS(obj);
     DeviceState *dev = DEVICE(obj);
