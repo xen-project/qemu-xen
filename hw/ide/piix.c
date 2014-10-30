@@ -169,12 +169,12 @@ static int pci_piix3_xen_ide_unplug(DeviceState *dev)
     PCIDevice *pci_dev;
     PCIIDEState *pci_ide;
     DriveInfo *di;
-    int i = 0;
+    int i;
 
     pci_dev = DO_UPCAST(PCIDevice, qdev, dev);
     pci_ide = DO_UPCAST(PCIIDEState, dev, pci_dev);
 
-    for (; i < 3; i++) {
+    for (i = 0; i < 4; i++) {
         di = drive_get_by_index(IF_IDE, i);
         if (di != NULL && !di->media_cd) {
             DeviceState *ds = bdrv_get_attached_dev(di->bdrv);
