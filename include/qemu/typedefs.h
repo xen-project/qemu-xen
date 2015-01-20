@@ -39,6 +39,7 @@ typedef struct AudioState AudioState;
 typedef struct BlockBackend BlockBackend;
 typedef struct BlockDriverState BlockDriverState;
 typedef struct DriveInfo DriveInfo;
+typedef struct DeviceListener DeviceListener;
 typedef struct DisplayState DisplayState;
 typedef struct DisplayChangeListener DisplayChangeListener;
 typedef struct DisplaySurface DisplaySurface;
