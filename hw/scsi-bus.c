@@ -9,6 +9,8 @@
 static char *scsibus_get_fw_dev_path(DeviceState *dev);
 static int scsi_req_parse(SCSICommand *cmd, SCSIDevice *dev, uint8_t *buf);
 static void scsi_req_dequeue(SCSIRequest *req);
+static uint8_t *scsi_target_alloc_buf(SCSIRequest *req, size_t len);
+static void scsi_target_free_buf(SCSIRequest *req);
 
 static struct BusInfo scsi_bus_info = {
     .name  = "SCSI",
@@ -247,7 +249,8 @@ typedef struct SCSITargetReq SCSITargetReq;
 struct SCSITargetReq {
     SCSIRequest req;
     int len;
-    uint8_t buf[2056];
+    uint8_t *buf;
+    int buf_len;
 };
 
 static void store_lun(uint8_t *outbuf, int lun)
@@ -290,14 +293,12 @@ static bool scsi_target_emulate_report_luns(SCSITargetReq *r)
     if (!found_lun0) {
         n += 8;
     }
-    len = MIN(n + 8, r->req.cmd.xfer & ~7);
-    if (len > sizeof(r->buf)) {
-        /* TODO: > 256 LUNs? */
-        return false;
-    }
 
+    scsi_target_alloc_buf(&r->req, n + 8);
+
+    len = MIN(n + 8, r->req.cmd.xfer & ~7);
     memset(r->buf, 0, len);
-    stl_be_p(&r->buf, n);
+    stl_be_p(&r->buf[0], n);
     i = found_lun0 ? 8 : 16;
     QTAILQ_FOREACH(qdev, &r->req.bus->qbus.children, sibling) {
         SCSIDevice *dev = DO_UPCAST(SCSIDevice, qdev, qdev);
@@ -315,6 +316,9 @@ static bool scsi_target_emulate_report_luns(SCSITargetReq *r)
 static bool scsi_target_emulate_inquiry(SCSITargetReq *r)
 {
     assert(r->req.dev->lun != r->req.lun);
+
+    scsi_target_alloc_buf(&r->req, SCSI_INQUIRY_LEN);
+
     if (r->req.cmd.buf[1] & 0x2) {
         /* Command support data - optional, not implemented */
         return false;
@@ -343,7 +347,7 @@ static bool scsi_target_emulate_inquiry(SCSITargetReq *r)
             return false;
         }
         /* done with EVPD */
-        assert(r->len < sizeof(r->buf));
+        assert(r->len < r->buf_len);
         r->len = MIN(r->req.cmd.xfer, r->len);
         return true;
     }
@@ -358,7 +362,7 @@ static bool scsi_target_emulate_inquiry(SCSITargetReq *r)
         return -1;
     }
 
-    r->len = MIN(r->req.cmd.xfer, 36);
+    r->len = MIN(r->req.cmd.xfer, SCSI_INQUIRY_LEN);
     memset(r->buf, 0, r->len);
     if (r->req.lun != 0) {
         r->buf[0] = TYPE_NO_LUN;
@@ -394,8 +398,9 @@ static int32_t scsi_target_send_command(SCSIRequest *req, uint8_t *buf)
         if (req->cmd.xfer < 4) {
             goto illegal_request;
         }
+        scsi_target_alloc_buf(&r->req, SCSI_SENSE_LEN);
         r->len = scsi_device_get_sense(r->req.dev, r->buf,
-                                       MIN(req->cmd.xfer, sizeof r->buf),
+                                       MIN(req->cmd.xfer, r->buf_len),
                                        (req->cmd.buf[1] & 1) == 0);
         if (r->req.dev->sense_is_ua) {
             if (r->req.dev->info->unit_attention_reported) {
@@ -442,11 +447,29 @@ static uint8_t *scsi_target_get_buf(SCSIRequest *req)
     return r->buf;
 }
 
+static uint8_t *scsi_target_alloc_buf(SCSIRequest *req, size_t len)
+{
+    SCSITargetReq *r = DO_UPCAST(SCSITargetReq, req, req);
+
+    r->buf = g_malloc(len);
+    r->buf_len = len;
+
+    return r->buf;
+}
+
+static void scsi_target_free_buf(SCSIRequest *req)
+{
+    SCSITargetReq *r = DO_UPCAST(SCSITargetReq, req, req);
+
+    g_free(r->buf);
+}
+
 static const struct SCSIReqOps reqops_target_command = {
     .size         = sizeof(SCSITargetReq),
     .send_command = scsi_target_send_command,
     .read_data    = scsi_target_read_data,
     .get_buf      = scsi_target_get_buf,
+    .free_req     = scsi_target_free_buf,
 };
 
 
@@ -1092,7 +1115,7 @@ int scsi_build_sense(uint8_t *in_buf, int in_len,
         buf[7] = 10;
         buf[12] = sense.asc;
         buf[13] = sense.ascq;
-        return MIN(len, 18);
+        return MIN(len, SCSI_SENSE_LEN);
     } else {
         /* Return descriptor format sense buffer */
         buf[0] = 0x72;
