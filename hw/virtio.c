@@ -396,6 +396,12 @@ void virtqueue_map_sg(struct iovec *sg, target_phys_addr_t *addr,
     unsigned int i;
     target_phys_addr_t len;
 
+    if (num_sg >= VIRTQUEUE_MAX_SIZE) {
+        error_report("virtio: map attempt out of bounds: %zd > %d",
+                     num_sg, VIRTQUEUE_MAX_SIZE);
+        exit(1);
+    }
+
     for (i = 0; i < num_sg; i++) {
         len = sg[i].iov_len;
         sg[i].iov_base = cpu_physical_memory_map(addr[i], &len, is_write);
