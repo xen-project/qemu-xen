@@ -1472,7 +1472,7 @@ void ide_exec_cmd(IDEBus *bus, uint32_t val)
 		case 2: /* extended self test */
 		s->smart_selftest_count++;
 		if(s->smart_selftest_count > 21)
-			s->smart_selftest_count = 0;
+			s->smart_selftest_count = 1;
 		n = 2 + (s->smart_selftest_count - 1) * 24;
 		s->smart_selftest_data[n] = s->sector;
 		s->smart_selftest_data[n+1] = 0x00; /* OK and finished */
