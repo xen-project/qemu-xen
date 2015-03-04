@@ -366,7 +366,7 @@ static int virtio_net_handle_mac(VirtIONet *n, uint8_t cmd,
         return VIRTIO_NET_ERR;
 
     if (mac_data.entries) {
-        if (n->mac_table.in_use + mac_data.entries <= MAC_TABLE_ENTRIES) {
+        if (mac_data.entries <= MAC_TABLE_ENTRIES - n->mac_table.in_use) {
             memcpy(n->mac_table.macs + (n->mac_table.in_use * ETH_ALEN),
                    elem->out_sg[2].iov_base + sizeof(mac_data),
                    mac_data.entries * ETH_ALEN);
