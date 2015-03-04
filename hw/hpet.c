@@ -219,9 +219,24 @@ static int hpet_pre_load(void *opaque)
     return 0;
 }
 
+static bool hpet_validate_num_timers(void *opaque, int version_id)
+{
+    HPETState *s = opaque;
+
+    if (s->num_timers < HPET_MIN_TIMERS) {
+        return false;
+    } else if (s->num_timers > HPET_MAX_TIMERS) {
+        return false;
+    }
+    return true;
+}
+
 static int hpet_post_load(void *opaque, int version_id)
 {
     HPETState *s = opaque;
+
+    if (!hpet_validate_num_timers(s, version_id))
+        return -EINVAL;
 
     /* Recalculate the offset between the main counter and guest time */
     s->hpet_offset = ticks_to_ns(s->hpet_counter) - qemu_get_clock_ns(vm_clock);
