@@ -27,8 +27,11 @@
 #include "pci.h"
 
 #undef VERBOSE
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+#if 0
 #define HW_RECT_ACCEL
 #define HW_FILL_ACCEL
+#endif
 #define HW_MOUSE_ACCEL
 
 #include "vga_int.h"
