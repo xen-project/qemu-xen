@@ -128,6 +128,14 @@ static int qcow_open(BlockDriverState *bs, int flags)
         ret = -EINVAL;
         goto fail;
     }
+
+    /* l2_bits specifies number of entries; storing a uint64_t in each entry,
+     * so bytes = num_entries << 3. */
+    if (header.l2_bits < 9 - 3 || header.l2_bits > 16 - 3) {
+        ret = -EINVAL;
+        goto fail;
+    }
+
     if (header.crypt_method > QCOW_CRYPT_AES) {
         ret = -EINVAL;
         goto fail;
