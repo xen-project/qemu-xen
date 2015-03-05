@@ -436,9 +436,6 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags)
     s->refcount_table_size =
         header.refcount_table_clusters << (s->cluster_bits - 3);
 
-    s->snapshots_offset = header.snapshots_offset;
-    s->nb_snapshots = header.nb_snapshots;
-
     /* read the level 1 table */
     s->l1_size = header.l1_size;
 
@@ -507,6 +504,10 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags)
         }
         bs->backing_file[len] = '\0';
     }
+
+    /* Internal snapshots */
+    s->snapshots_offset = header.snapshots_offset;
+    s->nb_snapshots = header.nb_snapshots;
 
     ret = qcow2_read_snapshots(bs);
     if (ret < 0) {
