@@ -27,6 +27,14 @@
 #include "module.h"
 #include <zlib.h>
 
+enum {
+    /* Limit chunk sizes to prevent unreasonable amounts of memory being used
+     * or truncating when converting to 32-bit types
+     */
+    DMG_LENGTHS_MAX = 64 * 1024 * 1024, /* 64 MB */
+    DMG_SECTORCOUNTS_MAX = DMG_LENGTHS_MAX / 512,
+};
+
 typedef struct BDRVDMGState {
     CoMutex lock;
     /* each chunk contains a certain number of sectors,
@@ -186,11 +194,25 @@ static int dmg_open(BlockDriverState *bs, int flags)
 		s->sectorcounts[i] = read_off(bs, offset);
 		offset += 8;
 
+        if (s->sectorcounts[i] > DMG_SECTORCOUNTS_MAX) {
+            error_report("sector count %" PRIu64 " for chunk %u is "
+                    "larger than max (%u)",
+                    s->sectorcounts[i], i, DMG_SECTORCOUNTS_MAX);
+            goto fail;
+        }
+
 		s->offsets[i] = last_in_offset+read_off(bs, offset);
 		offset += 8;
 
 		s->lengths[i] = read_off(bs, offset);
 		offset += 8;
+
+        if (s->lengths[i] > DMG_LENGTHS_MAX) {
+            error_report("length %" PRIu64 " for chunk %u is larger "
+                    "than max (%u)",
+                    s->lengths[i], i, DMG_LENGTHS_MAX);
+            goto fail;
+        }
 
         update_max_chunk_size(s, i, &max_compressed_size,
                 &max_sectors_per_chunk);
