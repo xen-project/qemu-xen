@@ -200,7 +200,9 @@ static void pc_init1(MachineState *machine)
     }
 
     if (pci_enabled) {
-        pci_bus = i440fx_init(&i440fx_state, &piix3_devfn, &isa_bus, gsi,
+        pci_bus = i440fx_init(TYPE_I440FX_PCI_HOST_BRIDGE,
+                              TYPE_I440FX_PCI_DEVICE,
+                              &i440fx_state, &piix3_devfn, &isa_bus, gsi,
                               system_memory, system_io, machine->ram_size,
                               below_4g_mem_size,
                               above_4g_mem_size,
