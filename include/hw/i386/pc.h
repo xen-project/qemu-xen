@@ -636,4 +636,5 @@ static inline void pc_default_machine_options(MachineClass *m)
     (m)->compat_props = props; \
 } while (0)
 
+extern void igd_passthrough_isa_bridge_create(PCIBus *bus, uint16_t gpu_dev_id);
 #endif
