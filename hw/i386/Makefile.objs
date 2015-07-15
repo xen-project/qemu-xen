@@ -7,6 +7,8 @@ obj-$(CONFIG_XEN) += ../xenpv/ xen/
 
 obj-y += kvmvapic.o
 obj-y += acpi-build.o
+obj-y += pci-assign-load-rom.o
+
 hw/i386/acpi-build.o: hw/i386/acpi-build.c \
 	hw/i386/acpi-dsdt.hex hw/i386/q35-acpi-dsdt.hex
 
