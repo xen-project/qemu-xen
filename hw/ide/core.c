@@ -2013,6 +2013,10 @@ void ide_data_writew(void *opaque, uint32_t addr, uint32_t val)
     }
 
     p = s->data_ptr;
+    if (p + 2 > s->data_end) {
+        return;
+    }
+
     *(uint16_t *)p = le16_to_cpu(val);
     p += 2;
     s->data_ptr = p;
@@ -2034,6 +2038,10 @@ uint32_t ide_data_readw(void *opaque, uint32_t addr)
     }
 
     p = s->data_ptr;
+    if (p + 2 > s->data_end) {
+        return 0;
+    }
+
     ret = cpu_to_le16(*(uint16_t *)p);
     p += 2;
     s->data_ptr = p;
@@ -2055,6 +2063,10 @@ void ide_data_writel(void *opaque, uint32_t addr, uint32_t val)
     }
 
     p = s->data_ptr;
+    if (p + 4 > s->data_end) {
+        return;
+    }
+
     *(uint32_t *)p = le32_to_cpu(val);
     p += 4;
     s->data_ptr = p;
@@ -2076,6 +2088,10 @@ uint32_t ide_data_readl(void *opaque, uint32_t addr)
     }
 
     p = s->data_ptr;
+    if (p + 4 > s->data_end) {
+        return 0;
+    }
+
     ret = cpu_to_le32(*(uint32_t *)p);
     p += 4;
     s->data_ptr = p;
