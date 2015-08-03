@@ -170,6 +170,7 @@ static int pci_piix3_xen_ide_unplug(DeviceState *dev)
     PCIIDEState *pci_ide;
     DriveInfo *di;
     int i;
+    IDEDevice *idedev;
 
     pci_dev = DO_UPCAST(PCIDevice, qdev, dev);
     pci_ide = DO_UPCAST(PCIIDEState, dev, pci_dev);
@@ -183,6 +184,12 @@ static int pci_piix3_xen_ide_unplug(DeviceState *dev)
             }
             bdrv_close(di->bdrv);
             pci_ide->bus[di->bus].ifs[di->unit].bs = NULL;
+            if (!(i % 2)) {
+                idedev = pci_ide->bus[di->bus].master;
+            } else {
+                idedev = pci_ide->bus[di->bus].slave;
+            }
+            idedev->conf.bs = NULL;
             drive_put_ref(di);
         }
     }
