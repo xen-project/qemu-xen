@@ -1916,7 +1916,7 @@ void xen_pt_config_delete(XenPCIPassthroughState *s)
 
     /* free MSI/MSI-X info table */
     if (s->msix) {
-        xen_pt_msix_delete(s);
+        xen_pt_msix_unmap(s);
     }
     if (s->msi) {
         g_free(s->msi);
