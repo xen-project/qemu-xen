@@ -157,4 +157,20 @@ void destroy_hvm_domain(bool reboot);
 /* shutdown/destroy current domain because of an error */
 void xen_shutdown_fatal_error(const char *fmt, ...) GCC_FMT_ATTR(1, 2);
 
+#if CONFIG_XEN_CTRL_INTERFACE_VERSION < 470
+static inline int xen_domain_create(XenXC xc, uint32_t ssidref,
+                                    xen_domain_handle_t handle, uint32_t flags,
+                                    uint32_t *pdomid)
+{
+    return xc_domain_create(xc, ssidref, handle, flags, pdomid);
+}
+#else
+static inline int xen_domain_create(XenXC xc, uint32_t ssidref,
+                                    xen_domain_handle_t handle, uint32_t flags,
+                                    uint32_t *pdomid)
+{
+    return xc_domain_create(xc, ssidref, handle, flags, pdomid, NULL);
+}
+#endif
+
 #endif /* QEMU_HW_XEN_COMMON_H */
